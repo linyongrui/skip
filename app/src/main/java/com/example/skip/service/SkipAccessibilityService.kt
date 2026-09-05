@@ -46,7 +46,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         try {
             val nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
-            if (NodeDebugStore.requested) NodeDebugStore.publish(nodes.joinToString("\n") { describe(it) }.ifBlank { "No accessible nodes." })
+            if (NodeDebugStore.requested) NodeDebugStore.publish(nodes.joinToString("\n") { describe(it) }.ifBlank { "没有可访问节点。" })
             if (settings.paused || completedPages.contains(windowKey)) return
             val now = System.currentTimeMillis()
             if (now - lastExecutionAt < COOLDOWN_MS) return
@@ -63,7 +63,7 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             if (success) {
                 completedPages.add(windowKey); lastExecutionAt = now
-                if (settings.loggingEnabled) scope.launch { repository.appendLog("Executed ${rule.action} for $packageName") }
+                if (settings.loggingEnabled) scope.launch { repository.appendLog("已对 $packageName 执行${actionLabel(rule.action)}") }
             }
         } catch (_: RuntimeException) {
             // Fail open: accessibility events must never interfere with the foreground app.
@@ -105,7 +105,8 @@ class SkipAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun describe(node: AccessibilityNodeInfo): String = "${node.className ?: "?"} id=${node.viewIdResourceName ?: "-"} text=${node.text ?: "-"} desc=${node.contentDescription ?: "-"} clickable=${node.isClickable}"
+    private fun describe(node: AccessibilityNodeInfo): String = "${node.className ?: "?"} 视图ID=${node.viewIdResourceName ?: "-"} 文本=${node.text ?: "-"} 内容描述=${node.contentDescription ?: "-"} 可点击=${node.isClickable}"
+    private fun actionLabel(action: RuleAction) = when (action) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级"; RuleAction.BACK -> "系统返回" }
 
     private companion object { const val MAX_DEPTH = 18; const val MAX_NODES = 250; const val MAX_ANCESTORS = 6; const val COOLDOWN_MS = 800L; const val SCAN_TIMEOUT_MS = 150L }
 }

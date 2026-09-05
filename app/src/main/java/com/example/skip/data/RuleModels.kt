@@ -24,10 +24,10 @@ data class SkipRule(
     val retryLimit: Int = 1
 ) {
     fun validate(): String? {
-        if (!PACKAGE_REGEX.matches(packageName)) return "Package name is invalid"
-        if (viewId.isBlank() && text.isBlank() && contentDescription.isBlank()) return "Set a view ID, text, or content description"
-        if (listOf(viewId, text, contentDescription, className, pageMustContain, pageMustNotContain).any { it.length > MAX_FIELD_LENGTH }) return "A field is too long"
-        if (retryLimit !in 0..2) return "Retry limit must be between 0 and 2"
+        if (!PACKAGE_REGEX.matches(packageName)) return "包名无效"
+        if (viewId.isBlank() && text.isBlank() && contentDescription.isBlank()) return "请设置 View ID、文本或内容描述"
+        if (listOf(viewId, text, contentDescription, className, pageMustContain, pageMustNotContain).any { it.length > MAX_FIELD_LENGTH }) return "字段内容过长"
+        if (retryLimit !in 0..2) return "重试次数必须在 0 到 2 之间"
         return null
     }
 
@@ -42,17 +42,17 @@ data class SkipRule(
         private val PACKAGE_REGEX = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
         fun fromJson(json: JSONObject): SkipRule {
             val allowed = setOf("id", "enabled", "packageName", "viewId", "text", "contentDescription", "className", "pageMustContain", "pageMustNotContain", "action", "retryLimit")
-            require(json.keys().asSequence().all { it in allowed }) { "Unknown rule field" }
+            require(json.keys().asSequence().all { it in allowed }) { "包含未知规则字段" }
             fun string(name: String): String {
                 val value = if (json.has(name)) json.get(name) else ""
-                require(value is String) { "$name must be a string" }
-                require(value.length <= MAX_FIELD_LENGTH) { "$name is too long" }
+                require(value is String) { "$name 必须为字符串" }
+                require(value.length <= MAX_FIELD_LENGTH) { "$name 内容过长" }
                 return value
             }
-            val enabled = if (json.has("enabled")) json.get("enabled").also { require(it is Boolean) { "enabled must be a boolean" } } as Boolean else false
+            val enabled = if (json.has("enabled")) json.get("enabled").also { require(it is Boolean) { "enabled 必须为布尔值" } } as Boolean else false
             val retryLimit = if (json.has("retryLimit")) {
                 val value = json.get("retryLimit")
-                require(value is Number && value.toDouble() == value.toInt().toDouble()) { "retryLimit must be an integer" }
+                require(value is Number && value.toDouble() == value.toInt().toDouble()) { "retryLimit 必须为整数" }
                 value.toInt()
             } else 1
             val rule = SkipRule(
@@ -62,7 +62,7 @@ data class SkipRule(
                 pageMustContain = string("pageMustContain"), pageMustNotContain = string("pageMustNotContain"),
                 action = RuleAction.valueOf(string("action")), retryLimit = retryLimit
             )
-            require(rule.validate() == null) { rule.validate() ?: "Invalid rule" }
+            require(rule.validate() == null) { rule.validate() ?: "规则无效" }
             return rule
         }
     }
@@ -73,9 +73,9 @@ data class RuleDocument(val rules: List<SkipRule>) {
     companion object {
         fun parse(raw: String): List<SkipRule> {
             val root = JSONObject(raw)
-            require(root.length() == 2 && root.optInt("version", -1) == RULE_FORMAT_VERSION) { "Unsupported rule document" }
+            require(root.length() == 2 && root.optInt("version", -1) == RULE_FORMAT_VERSION) { "不支持的规则文件" }
             val array = root.getJSONArray("rules")
-            require(array.length() <= MAX_RULES) { "Too many rules" }
+            require(array.length() <= MAX_RULES) { "规则数量过多" }
             return buildList { for (i in 0 until array.length()) add(SkipRule.fromJson(array.getJSONObject(i)).copy(enabled = false)) }
         }
     }
