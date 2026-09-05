@@ -1,0 +1,82 @@
+package com.example.skip.data
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
+
+const val RULE_FORMAT_VERSION = 1
+const val MAX_RULES = 100
+const val MAX_FIELD_LENGTH = 160
+
+enum class RuleAction { CLICK, PARENT_CLICK, BACK }
+
+data class SkipRule(
+    val id: String = UUID.randomUUID().toString(),
+    val enabled: Boolean = false,
+    val packageName: String,
+    val viewId: String = "",
+    val text: String = "",
+    val contentDescription: String = "",
+    val className: String = "",
+    val pageMustContain: String = "",
+    val pageMustNotContain: String = "",
+    val action: RuleAction = RuleAction.CLICK,
+    val retryLimit: Int = 1
+) {
+    fun validate(): String? {
+        if (!PACKAGE_REGEX.matches(packageName)) return "Package name is invalid"
+        if (viewId.isBlank() && text.isBlank() && contentDescription.isBlank()) return "Set a view ID, text, or content description"
+        if (listOf(viewId, text, contentDescription, className, pageMustContain, pageMustNotContain).any { it.length > MAX_FIELD_LENGTH }) return "A field is too long"
+        if (retryLimit !in 0..2) return "Retry limit must be between 0 and 2"
+        return null
+    }
+
+    fun toJson() = JSONObject().apply {
+        put("id", id); put("enabled", enabled); put("packageName", packageName)
+        put("viewId", viewId); put("text", text); put("contentDescription", contentDescription)
+        put("className", className); put("pageMustContain", pageMustContain); put("pageMustNotContain", pageMustNotContain)
+        put("action", action.name); put("retryLimit", retryLimit)
+    }
+
+    companion object {
+        private val PACKAGE_REGEX = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
+        fun fromJson(json: JSONObject): SkipRule {
+            val allowed = setOf("id", "enabled", "packageName", "viewId", "text", "contentDescription", "className", "pageMustContain", "pageMustNotContain", "action", "retryLimit")
+            require(json.keys().asSequence().all { it in allowed }) { "Unknown rule field" }
+            fun string(name: String): String {
+                val value = if (json.has(name)) json.get(name) else ""
+                require(value is String) { "$name must be a string" }
+                require(value.length <= MAX_FIELD_LENGTH) { "$name is too long" }
+                return value
+            }
+            val enabled = if (json.has("enabled")) json.get("enabled").also { require(it is Boolean) { "enabled must be a boolean" } } as Boolean else false
+            val retryLimit = if (json.has("retryLimit")) {
+                val value = json.get("retryLimit")
+                require(value is Number && value.toDouble() == value.toInt().toDouble()) { "retryLimit must be an integer" }
+                value.toInt()
+            } else 1
+            val rule = SkipRule(
+                id = string("id").ifBlank { UUID.randomUUID().toString() }, enabled = enabled,
+                packageName = string("packageName"), viewId = string("viewId"), text = string("text"),
+                contentDescription = string("contentDescription"), className = string("className"),
+                pageMustContain = string("pageMustContain"), pageMustNotContain = string("pageMustNotContain"),
+                action = RuleAction.valueOf(string("action")), retryLimit = retryLimit
+            )
+            require(rule.validate() == null) { rule.validate() ?: "Invalid rule" }
+            return rule
+        }
+    }
+}
+
+data class RuleDocument(val rules: List<SkipRule>) {
+    fun toJson(): String = JSONObject().put("version", RULE_FORMAT_VERSION).put("rules", JSONArray(rules.map { it.toJson() })).toString(2)
+    companion object {
+        fun parse(raw: String): List<SkipRule> {
+            val root = JSONObject(raw)
+            require(root.length() == 2 && root.optInt("version", -1) == RULE_FORMAT_VERSION) { "Unsupported rule document" }
+            val array = root.getJSONArray("rules")
+            require(array.length() <= MAX_RULES) { "Too many rules" }
+            return buildList { for (i in 0 until array.length()) add(SkipRule.fromJson(array.getJSONObject(i)).copy(enabled = false)) }
+        }
+    }
+}

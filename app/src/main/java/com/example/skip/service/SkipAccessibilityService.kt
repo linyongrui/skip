@@ -1,0 +1,111 @@
+package com.example.skip.service
+
+import android.accessibilityservice.AccessibilityService
+import android.os.SystemClock
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import com.example.skip.data.AppSettings
+import com.example.skip.data.RuleRepository
+import com.example.skip.data.RuleAction
+import com.example.skip.data.SkipRule
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
+
+class SkipAccessibilityService : AccessibilityService() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private lateinit var repository: RuleRepository
+    @Volatile private var rules: List<SkipRule> = emptyList()
+    @Volatile private var settings = AppSettings()
+    private val attempts = ConcurrentHashMap<String, Int>()
+    private val completedPages = ConcurrentHashMap.newKeySet<String>()
+    private var lastExecutionAt = 0L
+    private var lastWindowKey = ""
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        repository = RuleRepository(applicationContext)
+        scope.launch { repository.rules.collectLatest { rules = it } }
+        scope.launch { repository.settings.collectLatest { settings = it } }
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event ?: return
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
+        val packageName = event.packageName?.toString() ?: return
+        val activeRules = rules.filter { it.enabled && it.packageName == packageName }
+        if (activeRules.isEmpty()) return
+        val windowKey = "$packageName:${event.windowId}"
+        if (windowKey != lastWindowKey) {
+            completedPages.clear(); attempts.clear(); lastWindowKey = windowKey
+        }
+        val root = rootInActiveWindow ?: return
+        try {
+            val nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
+            if (NodeDebugStore.requested) NodeDebugStore.publish(nodes.joinToString("\n") { describe(it) }.ifBlank { "No accessible nodes." })
+            if (settings.paused || completedPages.contains(windowKey)) return
+            val now = System.currentTimeMillis()
+            if (now - lastExecutionAt < COOLDOWN_MS) return
+            val rule = activeRules.firstOrNull { matchesPage(it, nodes) && nodes.any { node -> matchesNode(it, node) } } ?: return
+            val attemptKey = "$windowKey:${rule.id}"
+            val count = attempts[attemptKey] ?: 0
+            if (count > rule.retryLimit) return
+            attempts[attemptKey] = count + 1
+            val target = nodes.firstOrNull { matchesNode(rule, it) } ?: return
+            val success = when (rule.action) {
+                RuleAction.CLICK -> target.isClickable && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                RuleAction.PARENT_CLICK -> clickAncestor(target)
+                RuleAction.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+            if (success) {
+                completedPages.add(windowKey); lastExecutionAt = now
+                if (settings.loggingEnabled) scope.launch { repository.appendLog("Executed ${rule.action} for $packageName") }
+            }
+        } catch (_: RuntimeException) {
+            // Fail open: accessibility events must never interfere with the foreground app.
+        }
+    }
+
+    override fun onInterrupt() = Unit
+    override fun onDestroy() { scope.cancel(); super.onDestroy() }
+
+    private fun collectNodes(root: AccessibilityNodeInfo, maxDepth: Int, maxNodes: Int): List<AccessibilityNodeInfo> {
+        val result = ArrayList<AccessibilityNodeInfo>(maxNodes)
+        val startedAt = SystemClock.elapsedRealtime()
+        fun visit(node: AccessibilityNodeInfo, depth: Int) {
+            if (depth > maxDepth || result.size >= maxNodes || SystemClock.elapsedRealtime() - startedAt >= SCAN_TIMEOUT_MS) return
+            result.add(node)
+            for (index in 0 until node.childCount) node.getChild(index)?.let { visit(it, depth + 1) }
+        }
+        visit(root, 0)
+        return result
+    }
+
+    private fun matchesPage(rule: SkipRule, nodes: List<AccessibilityNodeInfo>): Boolean {
+        val allText = nodes.joinToString("\u0000") { "${it.text ?: ""}\u0000${it.contentDescription ?: ""}" }
+        return (rule.pageMustContain.isBlank() || allText.contains(rule.pageMustContain, true)) &&
+            (rule.pageMustNotContain.isBlank() || !allText.contains(rule.pageMustNotContain, true))
+    }
+
+    private fun matchesNode(rule: SkipRule, node: AccessibilityNodeInfo): Boolean =
+        (rule.viewId.isBlank() || rule.viewId == node.viewIdResourceName) &&
+            (rule.text.isBlank() || node.text?.toString()?.contains(rule.text, true) == true) &&
+            (rule.contentDescription.isBlank() || node.contentDescription?.toString()?.contains(rule.contentDescription, true) == true) &&
+            (rule.className.isBlank() || rule.className == node.className?.toString())
+
+    private fun clickAncestor(node: AccessibilityNodeInfo): Boolean {
+        var current: AccessibilityNodeInfo? = node
+        repeat(MAX_ANCESTORS) {
+            current?.let { if (it.isClickable && it.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true; current = it.parent }
+        }
+        return false
+    }
+
+    private fun describe(node: AccessibilityNodeInfo): String = "${node.className ?: "?"} id=${node.viewIdResourceName ?: "-"} text=${node.text ?: "-"} desc=${node.contentDescription ?: "-"} clickable=${node.isClickable}"
+
+    private companion object { const val MAX_DEPTH = 18; const val MAX_NODES = 250; const val MAX_ANCESTORS = 6; const val COOLDOWN_MS = 800L; const val SCAN_TIMEOUT_MS = 150L }
+}
