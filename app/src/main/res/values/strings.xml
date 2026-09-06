@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">跳过</string>
-    <string name="accessibility_service_label">跳过自动服务</string>
+    <string name="app_name">开屏跳过</string>
+    <string name="accessibility_service_label">开屏跳过</string>
     <string name="accessibility_service_description">仅执行您明确配置的本地规则。</string>
 </resources>
