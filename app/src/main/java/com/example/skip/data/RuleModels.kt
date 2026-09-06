@@ -7,6 +7,7 @@ import java.util.UUID
 const val RULE_FORMAT_VERSION = 1
 const val MAX_RULES = 100
 const val MAX_FIELD_LENGTH = 160
+const val MAX_RULE_DOCUMENT_LENGTH = 256 * 1024
 
 enum class RuleAction { CLICK, PARENT_CLICK, BACK }
 
@@ -71,12 +72,17 @@ data class SkipRule(
 data class RuleDocument(val rules: List<SkipRule>) {
     fun toJson(): String = JSONObject().put("version", RULE_FORMAT_VERSION).put("rules", JSONArray(rules.map { it.toJson() })).toString(2)
     companion object {
-        fun parse(raw: String): List<SkipRule> {
+        fun parse(raw: String, forceDisabled: Boolean = false): List<SkipRule> {
+            require(raw.length <= MAX_RULE_DOCUMENT_LENGTH) { "规则文件过大" }
             val root = JSONObject(raw)
             require(root.length() == 2 && root.optInt("version", -1) == RULE_FORMAT_VERSION) { "不支持的规则文件" }
             val array = root.getJSONArray("rules")
             require(array.length() <= MAX_RULES) { "规则数量过多" }
-            return buildList { for (i in 0 until array.length()) add(SkipRule.fromJson(array.getJSONObject(i)).copy(enabled = false)) }
+            return buildList { for (i in 0 until array.length()) {
+                val rule = SkipRule.fromJson(array.getJSONObject(i))
+                add(if (forceDisabled) rule.copy(enabled = false) else rule)
+            } }
         }
+
     }
 }
