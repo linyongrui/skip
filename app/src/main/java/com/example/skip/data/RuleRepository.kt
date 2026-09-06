@@ -22,7 +22,11 @@ class RuleRepository(private val context: Context) {
     }
     val settings: Flow<AppSettings> = context.ruleDataStore.data.map { AppSettings(it[pausedKey] ?: false, it[loggingKey] ?: false) }
     val logs: Flow<String> = context.ruleDataStore.data.map { it[logKey] ?: "" }
-    suspend fun saveRules(rules: List<SkipRule>) { require(rules.size <= MAX_RULES); context.ruleDataStore.edit { it[documentKey] = RuleDocument(rules).toJson() } }
+    suspend fun saveRules(rules: List<SkipRule>) {
+        require(rules.size <= MAX_RULES)
+        require(rules.map { it.id }.distinct().size == rules.size) { "规则 ID 不能重复" }
+        context.ruleDataStore.edit { it[documentKey] = RuleDocument(rules).toJson() }
+    }
     suspend fun setPaused(paused: Boolean) { context.ruleDataStore.edit { it[pausedKey] = paused } }
     suspend fun setLogging(enabled: Boolean) { context.ruleDataStore.edit { it[loggingKey] = enabled } }
     suspend fun appendLog(message: String) { context.ruleDataStore.edit { preferences ->

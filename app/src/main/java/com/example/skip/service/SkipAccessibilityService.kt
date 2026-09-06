@@ -25,6 +25,8 @@ class SkipAccessibilityService : AccessibilityService() {
     private val completedPages = ConcurrentHashMap.newKeySet<String>()
     private var lastExecutionAt = 0L
     private var lastWindowKey = ""
+    private var lastScanAt = 0L
+    private var lastScanWindowKey = ""
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -43,23 +45,30 @@ class SkipAccessibilityService : AccessibilityService() {
         if (windowKey != lastWindowKey) {
             completedPages.clear(); attempts.clear(); lastWindowKey = windowKey
         }
+        val eventNow = SystemClock.elapsedRealtime()
+        if (windowKey == lastScanWindowKey && eventNow - lastScanAt < SCAN_INTERVAL_MS) return
+        lastScanWindowKey = windowKey
+        lastScanAt = eventNow
         val root = rootInActiveWindow ?: return
+        var nodes: List<AccessibilityNodeInfo>? = null
         try {
-            val nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
-            if (NodeDebugStore.requested) NodeDebugStore.publish(nodes.joinToString("\n") { describe(it) }.ifBlank { "没有可访问节点。" })
+            nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
+            val scannedNodes = nodes ?: return
+            if (NodeDebugStore.requested) NodeDebugStore.publish(scannedNodes.joinToString("\n") { describe(it) }.ifBlank { "没有可访问节点。" })
             if (settings.paused || completedPages.contains(windowKey)) return
+            if (isSensitivePage(scannedNodes)) return
             val now = System.currentTimeMillis()
             if (now - lastExecutionAt < COOLDOWN_MS) return
-            val rule = activeRules.firstOrNull { matchesPage(it, nodes) && nodes.any { node -> matchesNode(it, node) } } ?: return
+            val rule = activeRules.firstOrNull { matchesPage(it, scannedNodes) && scannedNodes.any { node -> matchesNode(it, node) } } ?: return
             val attemptKey = "$windowKey:${rule.id}"
             val count = attempts[attemptKey] ?: 0
             if (count > rule.retryLimit) return
             attempts[attemptKey] = count + 1
-            val target = nodes.firstOrNull { matchesNode(rule, it) } ?: return
+            val target = scannedNodes.firstOrNull { matchesNode(rule, it) } ?: return
             val success = when (rule.action) {
                 RuleAction.CLICK -> target.isClickable && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                RuleAction.PARENT_CLICK -> clickAncestor(target)
-                RuleAction.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+                RuleAction.PARENT_CLICK -> target.isVisibleToUser && clickAncestor(target)
+                RuleAction.BACK -> rule.pageMustContain.isNotBlank() && performGlobalAction(GLOBAL_ACTION_BACK)
             }
             if (success) {
                 completedPages.add(windowKey); lastExecutionAt = now
@@ -67,6 +76,8 @@ class SkipAccessibilityService : AccessibilityService() {
             }
         } catch (_: RuntimeException) {
             // Fail open: accessibility events must never interfere with the foreground app.
+        } finally {
+            if (nodes == null) root.recycle() else nodes!!.forEach { runCatching { it.recycle() } }
         }
     }
 
@@ -79,7 +90,10 @@ class SkipAccessibilityService : AccessibilityService() {
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
             if (depth > maxDepth || result.size >= maxNodes || SystemClock.elapsedRealtime() - startedAt >= SCAN_TIMEOUT_MS) return
             result.add(node)
-            for (index in 0 until node.childCount) node.getChild(index)?.let { visit(it, depth + 1) }
+            for (index in 0 until node.childCount) {
+                if (result.size >= maxNodes || SystemClock.elapsedRealtime() - startedAt >= SCAN_TIMEOUT_MS) break
+                node.getChild(index)?.let { visit(it, depth + 1) }
+            }
         }
         visit(root, 0)
         return result
@@ -91,6 +105,12 @@ class SkipAccessibilityService : AccessibilityService() {
             (rule.pageMustNotContain.isBlank() || !allText.contains(rule.pageMustNotContain, true))
     }
 
+    private fun isSensitivePage(nodes: List<AccessibilityNodeInfo>): Boolean {
+        val text = nodes.joinToString(" ") { "${it.text ?: ""} ${it.contentDescription ?: ""}" }.lowercase()
+        val sensitiveTerms = listOf("密码", "验证码", "支付", "付款", "银行卡", "转账", "支付密码", "password", "verification code", "captcha")
+        return nodes.any { it.isPassword || (it.className?.toString()?.contains("EditText") == true && it.isEditable) } || sensitiveTerms.any(text::contains)
+    }
+
     private fun matchesNode(rule: SkipRule, node: AccessibilityNodeInfo): Boolean =
         (rule.viewId.isBlank() || rule.viewId == node.viewIdResourceName) &&
             (rule.text.isBlank() || node.text?.toString()?.contains(rule.text, true) == true) &&
@@ -99,14 +119,22 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun clickAncestor(node: AccessibilityNodeInfo): Boolean {
         var current: AccessibilityNodeInfo? = node
-        repeat(MAX_ANCESTORS) {
-            current?.let { if (it.isClickable && it.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true; current = it.parent }
+        repeat(MAX_ANCESTORS) { depth ->
+            val candidate = current ?: return@repeat
+            if (depth > 0 && candidate.isVisibleToUser && candidate.isEnabled && candidate.isClickable && candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                runCatching { candidate.recycle() }
+                return true
+            }
+            val parent = candidate.parent
+            if (depth > 0) runCatching { candidate.recycle() }
+            current = parent
         }
+        current?.let { if (it !== node) runCatching { it.recycle() } }
         return false
     }
 
     private fun describe(node: AccessibilityNodeInfo): String = "${node.className ?: "?"} 视图ID=${node.viewIdResourceName ?: "-"} 文本=${node.text ?: "-"} 内容描述=${node.contentDescription ?: "-"} 可点击=${node.isClickable}"
     private fun actionLabel(action: RuleAction) = when (action) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级"; RuleAction.BACK -> "系统返回" }
 
-    private companion object { const val MAX_DEPTH = 18; const val MAX_NODES = 250; const val MAX_ANCESTORS = 6; const val COOLDOWN_MS = 800L; const val SCAN_TIMEOUT_MS = 150L }
+    private companion object { const val MAX_DEPTH = 18; const val MAX_NODES = 250; const val MAX_ANCESTORS = 3; const val COOLDOWN_MS = 800L; const val SCAN_INTERVAL_MS = 250L; const val SCAN_TIMEOUT_MS = 150L }
 }

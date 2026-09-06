@@ -29,6 +29,8 @@ data class SkipRule(
         if (viewId.isBlank() && text.isBlank() && contentDescription.isBlank()) return "请设置 View ID、文本或内容描述"
         if (listOf(viewId, text, contentDescription, className, pageMustContain, pageMustNotContain).any { it.length > MAX_FIELD_LENGTH }) return "字段内容过长"
         if (retryLimit !in 0..2) return "重试次数必须在 0 到 2 之间"
+        if (action == RuleAction.BACK && pageMustContain.isBlank()) return "系统返回动作必须设置页面必须包含"
+        if (action == RuleAction.PARENT_CLICK && className.isBlank() && pageMustContain.isBlank()) return "点击父级动作需要设置控件类名或页面必须包含"
         return null
     }
 
@@ -78,10 +80,12 @@ data class RuleDocument(val rules: List<SkipRule>) {
             require(root.length() == 2 && root.optInt("version", -1) == RULE_FORMAT_VERSION) { "不支持的规则文件" }
             val array = root.getJSONArray("rules")
             require(array.length() <= MAX_RULES) { "规则数量过多" }
-            return buildList { for (i in 0 until array.length()) {
+            val parsed = buildList { for (i in 0 until array.length()) {
                 val rule = SkipRule.fromJson(array.getJSONObject(i))
                 add(if (forceDisabled) rule.copy(enabled = false) else rule)
             } }
+            require(parsed.map { it.id }.distinct().size == parsed.size) { "规则 ID 不能重复" }
+            return parsed
         }
 
     }

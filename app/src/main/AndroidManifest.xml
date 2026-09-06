@@ -27,6 +27,8 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:excludeFromRecents="true"
+            android:screenOrientation="portrait"
             android:theme="@style/Theme.Skip"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
