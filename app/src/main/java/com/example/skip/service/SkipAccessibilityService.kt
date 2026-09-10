@@ -1,9 +1,13 @@
 package com.example.skip.service
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.PixelFormat
 import android.os.SystemClock
+import android.view.Gravity
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.WindowManager
+import android.widget.Button
 import com.example.skip.data.AppSettings
 import com.example.skip.data.RuleRepository
 import com.example.skip.data.RuleAction
@@ -27,12 +31,16 @@ class SkipAccessibilityService : AccessibilityService() {
     private var lastWindowKey = ""
     private var lastScanAt = 0L
     private var lastScanWindowKey = ""
+    private var debugOverlay: Button? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         repository = RuleRepository(applicationContext)
         scope.launch { repository.rules.collectLatest { rules = it } }
         scope.launch { repository.settings.collectLatest { settings = it } }
+        scope.launch(Dispatchers.Main.immediate) { NodeDebugStore.targetPackageName.collectLatest { packageName ->
+            if (packageName == null) removeDebugOverlay() else showDebugOverlay(packageName)
+        } }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -54,9 +62,9 @@ class SkipAccessibilityService : AccessibilityService() {
         try {
             nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
             val scannedNodes = nodes ?: return
-            if (NodeDebugStore.requested) NodeDebugStore.publish(scannedNodes.joinToString("\n") { describe(it) }.ifBlank { "没有可访问节点。" })
+            val sensitivePage = isSensitivePage(scannedNodes)
             if (settings.paused || completedPages.contains(windowKey)) return
-            if (isSensitivePage(scannedNodes)) return
+            if (sensitivePage) return
             val now = System.currentTimeMillis()
             if (now - lastExecutionAt < COOLDOWN_MS) return
             val rule = activeRules.firstOrNull { matchesPage(it, scannedNodes) && scannedNodes.any { node -> matchesNode(it, node) } } ?: return
@@ -85,14 +93,66 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() = Unit
-    override fun onDestroy() { scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { removeDebugOverlay(); scope.cancel(); super.onDestroy() }
+
+    private fun showDebugOverlay(packageName: String) {
+        removeDebugOverlay()
+        val button = Button(this).apply {
+            text = "抓取"
+            contentDescription = "抓取当前界面节点"
+            setOnClickListener { captureDebugSnapshot(packageName) }
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.END; x = 24; y = 200 }
+        runCatching { getSystemService(WindowManager::class.java).addView(button, params); debugOverlay = button }
+            .onFailure { NodeDebugStore.publish("无法显示悬浮抓取按钮。") }
+    }
+
+    private fun removeDebugOverlay() {
+        debugOverlay?.let { view -> runCatching { getSystemService(WindowManager::class.java).removeView(view) } }
+        debugOverlay = null
+    }
+
+    private fun captureDebugSnapshot(packageName: String) {
+        if (!NodeDebugStore.isRequestedFor(packageName)) return
+        val root = rootInActiveWindow ?: run {
+            NodeDebugStore.updateStatus("当前界面暂时无法读取，请稍后重试。")
+            return
+        }
+        var nodes: List<AccessibilityNodeInfo>? = null
+        try {
+            if (root.packageName?.toString() != packageName) {
+                NodeDebugStore.updateStatus("当前界面不是所选应用，请切换后再点击抓取。")
+                return
+            }
+            nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
+            val scannedNodes = nodes ?: return
+            NodeDebugStore.publish(
+                if (isSensitivePage(scannedNodes)) "为保护隐私，无法查看包含输入框、密码、验证码或支付信息的页面。"
+                else scannedNodes.joinToString("\n") { describe(it) }.ifBlank { "没有可访问节点。" }
+            )
+        } catch (_: RuntimeException) {
+            NodeDebugStore.publish("无法读取当前界面节点。")
+        } finally {
+            if (nodes == null) root.recycle() else nodes!!.forEach { runCatching { it.recycle() } }
+        }
+    }
 
     private fun collectNodes(root: AccessibilityNodeInfo, maxDepth: Int, maxNodes: Int): List<AccessibilityNodeInfo> {
         val result = ArrayList<AccessibilityNodeInfo>(maxNodes)
         val startedAt = SystemClock.elapsedRealtime()
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
-            if (depth > maxDepth || result.size >= maxNodes || SystemClock.elapsedRealtime() - startedAt >= SCAN_TIMEOUT_MS) return
+            if (depth > maxDepth || result.size >= maxNodes || SystemClock.elapsedRealtime() - startedAt >= SCAN_TIMEOUT_MS) {
+                node.recycle()
+                return
+            }
             result.add(node)
+            if (depth >= maxDepth) return
             for (index in 0 until node.childCount) {
                 if (result.size >= maxNodes || SystemClock.elapsedRealtime() - startedAt >= SCAN_TIMEOUT_MS) break
                 node.getChild(index)?.let { visit(it, depth + 1) }

@@ -150,7 +150,16 @@ private fun SkipApp(serviceEnabled: Boolean) {
 
 @Composable private fun DebugScreen(onBack: () -> Unit) {
     val snapshot by NodeDebugStore.snapshot.collectAsState()
-    Page("节点树调试", onBack) { Button(onClick = NodeDebugStore::requestSnapshot, modifier = Modifier.fillMaxWidth()) { Text("请求下一次快照") }; Text(snapshot, style = MaterialTheme.typography.bodySmall) }
+    var selectedApp by remember { mutableStateOf<InstalledApp?>(null) }
+    var showAppPicker by remember { mutableStateOf(false) }
+    Page("节点树调试", onBack) {
+        OutlinedButton(onClick = { showAppPicker = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(selectedApp?.label ?: "选择要调试的应用", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Button(onClick = { NodeDebugStore.requestSnapshot(selectedApp!!.packageName) }, enabled = selectedApp != null, modifier = Modifier.fillMaxWidth()) { Text("显示悬浮抓取按钮") }
+        Text(snapshot, style = MaterialTheme.typography.bodySmall)
+    }
+    if (showAppPicker) InstalledAppPicker(onDismiss = { showAppPicker = false }, onSelected = { selectedApp = it; showAppPicker = false })
 }
 
 @Composable private fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composable () -> Unit) = Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) { Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { Text(title, style = MaterialTheme.typography.headlineMedium); onBack?.let { TextButton(onClick = it) { Text("返回") } } }; Divider(); content() }
