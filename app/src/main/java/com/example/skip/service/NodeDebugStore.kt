@@ -44,6 +44,8 @@ object NodeDebugStore {
 
     fun updateStatus(value: String) { _snapshot.value = value }
 
+    fun appendStatus(value: String) { _snapshot.value = "${_snapshot.value}\n\n$value" }
+
     @Synchronized
     private fun clear(message: String) {
         expirationJob?.cancel()

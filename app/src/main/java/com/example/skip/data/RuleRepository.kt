@@ -30,6 +30,23 @@ class RuleRepository(private val context: Context) {
         require(rules.map { it.id }.distinct().size == rules.size) { "规则 ID 不能重复" }
         context.ruleDataStore.edit { it[documentKey] = RuleDocument(rules).toJson() }
     }
+    suspend fun addRuleIfAbsent(rule: SkipRule): Boolean {
+        require(rule.validate() == null) { rule.validate() ?: "规则无效" }
+        var added = false
+        context.ruleDataStore.edit { preferences ->
+            val existing = RuleDocument.parse(preferences[documentKey] ?: "{\"version\":1,\"rules\":[]}")
+            val duplicate = existing.any {
+                it.packageName == rule.packageName && it.viewId == rule.viewId &&
+                    it.text == rule.text && it.contentDescription == rule.contentDescription && it.action == rule.action
+            }
+            if (!duplicate) {
+                require(existing.size < MAX_RULES) { "规则数量过多" }
+                preferences[documentKey] = RuleDocument(existing + rule).toJson()
+                added = true
+            }
+        }
+        return added
+    }
     suspend fun setPaused(paused: Boolean) { context.ruleDataStore.edit { it[pausedKey] = paused } }
     suspend fun setLogging(enabled: Boolean) { context.ruleDataStore.edit { it[loggingKey] = enabled } }
     suspend fun appendLog(message: String) { context.ruleDataStore.edit { preferences ->

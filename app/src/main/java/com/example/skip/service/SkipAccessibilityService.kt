@@ -132,10 +132,24 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
             val scannedNodes = nodes ?: return
-            NodeDebugStore.publish(
-                if (isSensitivePage(scannedNodes)) "为保护隐私，无法查看包含输入框、密码、验证码或支付信息的页面。"
-                else scannedNodes.joinToString("\n") { describe(it) }.ifBlank { "没有可访问节点。" }
-            )
+            if (isSensitivePage(scannedNodes)) {
+                NodeDebugStore.publish("为保护隐私，无法查看包含输入框、密码、验证码或支付信息的页面。")
+                return
+            }
+            val snapshot = scannedNodes.joinToString("\n") { describe(it) }.ifBlank { "没有可访问节点。" }
+            val automaticRule = buildAutomaticRule(packageName, scannedNodes)
+            NodeDebugStore.publish(snapshot)
+            if (automaticRule == null) {
+                NodeDebugStore.appendStatus("未自动添加规则：未找到同时具有稳定 View ID 和“跳过/skip”标识的可点击控件。")
+            } else {
+                scope.launch {
+                    runCatching { repository.addRuleIfAbsent(automaticRule) }
+                        .onSuccess { added ->
+                            NodeDebugStore.appendStatus(if (added) "已自动添加并启用“点击”规则。" else "相同规则已存在，未重复添加。")
+                        }
+                        .onFailure { NodeDebugStore.appendStatus("自动添加规则失败：${it.message ?: "未知错误"}") }
+                }
+            }
         } catch (_: RuntimeException) {
             NodeDebugStore.publish("无法读取当前界面节点。")
         } finally {
@@ -179,6 +193,33 @@ class SkipAccessibilityService : AccessibilityService() {
             (rule.text.isBlank() || node.text?.toString()?.contains(rule.text, true) == true) &&
             (rule.contentDescription.isBlank() || node.contentDescription?.toString()?.contains(rule.contentDescription, true) == true) &&
             (rule.className.isBlank() || rule.className == node.className?.toString())
+
+    private fun buildAutomaticRule(packageName: String, nodes: List<AccessibilityNodeInfo>): SkipRule? =
+        nodes.firstNotNullOfOrNull { node ->
+            val viewId = node.viewIdResourceName.orEmpty()
+            val text = skipKeyword(node.text?.toString())
+            val description = skipKeyword(node.contentDescription?.toString())
+            if (!node.isVisibleToUser || !node.isEnabled || !node.isClickable || viewId.isBlank() || (text == null && description == null && !viewId.contains("skip", true))) {
+                null
+            } else {
+                SkipRule(
+                    enabled = true,
+                    packageName = packageName,
+                    viewId = viewId,
+                    text = text.orEmpty(),
+                    contentDescription = description.orEmpty(),
+                    action = RuleAction.CLICK
+                )
+            }
+        }
+
+    private fun skipKeyword(value: String?): String? = when {
+        value.isNullOrBlank() -> null
+        value.contains("跳过", true) -> "跳过"
+        value.contains("跳過", true) -> "跳過"
+        value.contains("skip", true) -> "skip"
+        else -> null
+    }
 
     private fun clickAncestor(node: AccessibilityNodeInfo): Boolean {
         var current: AccessibilityNodeInfo? = node
