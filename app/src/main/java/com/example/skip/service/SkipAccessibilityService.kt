@@ -72,7 +72,10 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             if (success) {
                 completedPages.add(windowKey); lastExecutionAt = now
-                if (settings.loggingEnabled) scope.launch { repository.appendLog("已对 $packageName 执行${actionLabel(rule.action)}") }
+                if (settings.loggingEnabled) {
+                    val appLabel = applicationLabel(packageName)
+                    scope.launch { repository.appendLog("已对 $appLabel 执行${actionLabel(rule.action)}") }
+                }
             }
         } catch (_: RuntimeException) {
             // Fail open: accessibility events must never interfere with the foreground app.
@@ -134,6 +137,10 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun describe(node: AccessibilityNodeInfo): String = "${node.className ?: "?"} 视图ID=${node.viewIdResourceName ?: "-"} 文本=${node.text ?: "-"} 内容描述=${node.contentDescription ?: "-"} 可点击=${node.isClickable}"
+    private fun applicationLabel(packageName: String): String = runCatching {
+        packageManager.getApplicationInfo(packageName, 0).loadLabel(packageManager).toString()
+            .takeIf { it.isNotBlank() } ?: packageName
+    }.getOrDefault(packageName)
     private fun actionLabel(action: RuleAction) = when (action) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级"; RuleAction.BACK -> "系统返回" }
 
     private companion object { const val MAX_DEPTH = 18; const val MAX_NODES = 250; const val MAX_ANCESTORS = 3; const val COOLDOWN_MS = 800L; const val SCAN_INTERVAL_MS = 250L; const val SCAN_TIMEOUT_MS = 150L }

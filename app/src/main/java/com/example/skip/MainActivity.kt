@@ -17,19 +17,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -39,6 +45,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,8 +53,10 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.AppSettings
@@ -58,6 +67,7 @@ import com.example.skip.data.SkipRule
 import com.example.skip.service.NodeDebugStore
 import com.example.skip.ui.theme.SkipTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -108,7 +118,7 @@ private fun SkipApp(serviceEnabled: Boolean) {
     }
     Scaffold(modifier = Modifier.fillMaxSize()) { padding -> Column(Modifier.padding(padding)) {
         when (screen) {
-            "rules" -> RulesScreen(rules, onBack = { screen = "home" }, onAdd = { editing = SkipRule(enabled = true, packageName = "") }, onEdit = { editing = it }, onToggle = { rule, enabled -> scope.launch { repository.saveRules(rules.map { if (it.id == rule.id) it.copy(enabled = enabled) else it }) } }, onDelete = { rule -> scope.launch { repository.saveRules(rules.filterNot { it.id == rule.id }) } }, onImportFile = { importFile.launch(arrayOf("application/json", "text/plain")) }, onExportFile = { exportFile.launch("跳过规则.json") })
+            "rules" -> RulesScreen(rules, onBack = { screen = "home" }, onAdd = { editing = SkipRule(enabled = true, packageName = "", text = "跳过") }, onEdit = { editing = it }, onToggle = { rule, enabled -> scope.launch { repository.saveRules(rules.map { if (it.id == rule.id) it.copy(enabled = enabled) else it }) } }, onDelete = { rule -> scope.launch { repository.saveRules(rules.filterNot { it.id == rule.id }) } }, onImportFile = { importFile.launch(arrayOf("application/json", "text/plain")) }, onExportFile = { exportFile.launch("跳过规则.json") })
             "debug" -> DebugScreen(onBack = { screen = "home" })
             else -> HomeScreen(rules, settings, serviceEnabled, onOpenSettings = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, onPause = { scope.launch { repository.setPaused(it) } }, onRules = { screen = "rules" }, onDebug = { screen = "debug" }, onLogging = { scope.launch { repository.setLogging(it) } }, onClearLogs = { scope.launch { repository.clearLogs() } }, logs = logs)
         }
@@ -150,13 +160,24 @@ private fun SkipApp(serviceEnabled: Boolean) {
     val context = LocalContext.current
     var packageName by remember { mutableStateOf(rule.packageName) }; var viewId by remember { mutableStateOf(rule.viewId) }; var text by remember { mutableStateOf(rule.text) }; var description by remember { mutableStateOf(rule.contentDescription) }; var className by remember { mutableStateOf(rule.className) }; var required by remember { mutableStateOf(rule.pageMustContain) }; var forbidden by remember { mutableStateOf(rule.pageMustNotContain) }; var retry by remember { mutableStateOf(rule.retryLimit.toString()) }; var action by remember { mutableStateOf(rule.action) }; var error by remember { mutableStateOf("") }
     var showAppPicker by remember { mutableStateOf(false) }
+    var showActionMenu by remember { mutableStateOf(false) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("规则") }, text = { Column(Modifier.verticalScroll(rememberScrollState())) {
-        Text("目标应用", style = MaterialTheme.typography.titleMedium)
         val selectedAppName = remember(packageName) { packageName.takeIf { it.isNotBlank() }?.let { value -> runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(value, 0)).toString() }.getOrDefault(value) } }
-        OutlinedButton(onClick = { showAppPicker = true }, modifier = Modifier.fillMaxWidth()) { Text(selectedAppName ?: "选择已安装应用") }
-        if (selectedAppName != null && selectedAppName != packageName) Text(packageName, style = MaterialTheme.typography.bodySmall)
-        Field("也可手动输入包名", packageName) { packageName = it }
-        Field("视图 ID", viewId) { viewId = it }; Field("文本", text) { text = it }; Field("内容描述", description) { description = it }; Field("控件类名（可选）", className) { className = it }; Field("页面必须包含", required) { required = it }; Field("页面不能包含", forbidden) { forbidden = it }; Text("动作：${action.displayName()}"); Row { RuleAction.entries.forEach { value -> TextButton(onClick = { action = value }) { Text(value.displayName()) } } }; Field("重试次数（0-2）", retry, KeyboardType.Number) { retry = it }; if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text("目标应用", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(onClick = { showAppPicker = true }, modifier = Modifier.weight(1f).padding(start = 8.dp)) { Text(selectedAppName ?: "选择已安装应用", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+        Field("包名", packageName) { packageName = it }
+        Field("视图 ID", viewId) { viewId = it }; Field("文本", text) { text = it }; Field("内容描述", description) { description = it }; Field("控件类名（可选）", className) { className = it }; Field("页面必须包含", required) { required = it }; Field("页面不能包含", forbidden) { forbidden = it }
+        androidx.compose.foundation.layout.Box {
+            OutlinedButton(onClick = { showActionMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("动作：${action.displayName()}") }
+            DropdownMenu(expanded = showActionMenu, onDismissRequest = { showActionMenu = false }) {
+                RuleAction.entries.forEach { value ->
+                    DropdownMenuItem(text = { Text(value.displayName()) }, onClick = { action = value; showActionMenu = false })
+                }
+            }
+        }
+        Field("重试次数（0-2）", retry, KeyboardType.Number) { retry = it }; if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
     } }, confirmButton = { TextButton(onClick = { val candidate = rule.copy(packageName = packageName.trim(), viewId = viewId, text = text, contentDescription = description, className = className, pageMustContain = required, pageMustNotContain = forbidden, action = action, retryLimit = retry.toIntOrNull() ?: -1); error = candidate.validate() ?: ""; if (error.isBlank()) onSave(candidate) }) { Text("保存") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
     if (showAppPicker) InstalledAppPicker(onDismiss = { showAppPicker = false }, onSelected = { packageName = it.packageName; showAppPicker = false })
 }
@@ -171,7 +192,7 @@ private data class InstalledApp(val label: String, val packageName: String, val 
     val visibleApps = (apps ?: emptyList()).filter { app -> (showSystemApps || !app.isSystem) && (query.isBlank() || app.label.contains(query, true) || app.packageName.contains(query, true)) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("选择已安装应用") }, text = {
         Column {
-            OutlinedTextField(query, { query = it }, label = { Text("按名称或包名搜索") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Field("按名称或包名搜索", query) { query = it }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("显示系统应用"); Switch(showSystemApps, { showSystemApps = it }) }
             if (apps == null) CircularProgressIndicator()
             LazyColumn { items(visibleApps, key = { it.packageName }) { app ->
@@ -191,9 +212,26 @@ private fun loadInstalledApps(context: Context): List<InstalledApp> {
         .distinctBy { it.packageName }
         .sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
 }
-@Composable private fun Field(label: String, value: String, type: KeyboardType = KeyboardType.Text, update: (String) -> Unit) = OutlinedTextField(value, update, label = { Text(label) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(
-    keyboardType = type
-), singleLine = true)
+@Composable private fun Field(label: String, value: String, type: KeyboardType = KeyboardType.Text, update: (String) -> Unit) {
+    val state = rememberTextFieldState(value)
+    LaunchedEffect(value) {
+        if (state.text.toString() != value) state.edit { replace(0, length, value) }
+    }
+    LaunchedEffect(state, value) {
+        snapshotFlow { state.text.toString() }.collect { entered ->
+            if (entered != value) update(entered)
+        }
+    }
+    OutlinedTextField(
+        state = state,
+        label = { Text(label) },
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        contentPadding = compactFieldPadding(),
+        keyboardOptions = KeyboardOptions(keyboardType = type),
+        lineLimits = TextFieldLineLimits.SingleLine
+    )
+}
+@Composable private fun compactFieldPadding() = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
 private fun RuleAction.displayName() = when (this) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级"; RuleAction.BACK -> "系统返回" }
 private fun isServiceEnabled(context: Context): Boolean = (context.getSystemService(AccessibilityManager::class.java)?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK) ?: emptyList()).any { it.resolveInfo.serviceInfo.packageName == context.packageName && it.resolveInfo.serviceInfo.name == "${context.packageName}.service.SkipAccessibilityService" }
 private fun showMessage(context: Context, message: String) { Toast.makeText(context, message, Toast.LENGTH_SHORT).show() }
