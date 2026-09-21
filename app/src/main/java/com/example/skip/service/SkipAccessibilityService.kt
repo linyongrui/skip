@@ -12,6 +12,7 @@ import com.example.skip.data.AppSettings
 import com.example.skip.data.RuleRepository
 import com.example.skip.data.RuleAction
 import com.example.skip.data.SkipRule
+import com.example.skip.data.RuleSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -80,10 +81,8 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             if (success) {
                 completedPages.add(windowKey); lastExecutionAt = now
-                if (settings.loggingEnabled) {
-                    val appLabel = applicationLabel(packageName)
-                    scope.launch { repository.appendLog("已对 $appLabel 执行${actionLabel(rule.action)}") }
-                }
+                val appLabel = applicationLabel(packageName)
+                scope.launch { repository.appendLog("已对 $appLabel 执行${actionLabel(rule.action)}") }
             }
         } catch (_: RuntimeException) {
             // Fail open: accessibility events must never interfere with the foreground app.
@@ -143,7 +142,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 NodeDebugStore.appendStatus("未自动添加规则：未找到同时具有稳定 View ID 和“跳过/skip”标识的可点击控件。")
             } else {
                 scope.launch {
-                    runCatching { repository.addRuleIfAbsent(automaticRule) }
+                    runCatching { repository.addRuleIfAbsent(automaticRule.copy(source = RuleSource.CAPTURE)) }
                         .onSuccess { added ->
                             NodeDebugStore.appendStatus(if (added) "已自动添加并启用“点击”规则。" else "相同规则已存在，未重复添加。")
                         }

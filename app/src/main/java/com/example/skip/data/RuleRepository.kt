@@ -13,20 +13,25 @@ import java.util.Locale
 
 private val Context.ruleDataStore by preferencesDataStore("skip_rules")
 
-data class AppSettings(val paused: Boolean = false, val loggingEnabled: Boolean = false)
+data class AppSettings(val paused: Boolean = false)
 
 class RuleRepository(private val context: Context) {
     private val documentKey = stringPreferencesKey("rule_document")
     private val pausedKey = booleanPreferencesKey("paused")
-    private val loggingKey = booleanPreferencesKey("logging")
     private val logKey = stringPreferencesKey("bounded_log")
     val rules: Flow<List<SkipRule>> = context.ruleDataStore.data.map { prefs ->
-        runCatching { RuleDocument.parse(prefs[documentKey] ?: "{\"version\":1,\"rules\":[]}") }.getOrDefault(emptyList())
+        runCatching { keepHighestPriorityRules(RuleDocument.parse(prefs[documentKey] ?: "{\"version\":1,\"rules\":[]}")) }.getOrDefault(emptyList())
     }
-    val settings: Flow<AppSettings> = context.ruleDataStore.data.map { AppSettings(it[pausedKey] ?: false, it[loggingKey] ?: false) }
+    val settings: Flow<AppSettings> = context.ruleDataStore.data.map { AppSettings(it[pausedKey] ?: false) }
     val logs: Flow<String> = context.ruleDataStore.data.map { formatStoredLogs(it[logKey] ?: "") }
     suspend fun saveRules(rules: List<SkipRule>) {
-        require(rules.size <= MAX_RULES)
+        val normalized = keepHighestPriorityRules(rules)
+        require(normalized.size <= MAX_RULES)
+        require(normalized.map { it.id }.distinct().size == normalized.size) { "规则 ID 不能重复" }
+        context.ruleDataStore.edit { it[documentKey] = RuleDocument(normalized).toJson() }
+    }
+    suspend fun resetWithInitialRules(rules: List<SkipRule>) {
+        require(rules.size <= MAX_RULES) { "应用数量过多" }
         require(rules.map { it.id }.distinct().size == rules.size) { "规则 ID 不能重复" }
         context.ruleDataStore.edit { it[documentKey] = RuleDocument(rules).toJson() }
     }
@@ -39,22 +44,28 @@ class RuleRepository(private val context: Context) {
                 it.packageName == rule.packageName && it.viewId == rule.viewId &&
                     it.text == rule.text && it.contentDescription == rule.contentDescription && it.action == rule.action
             }
-            if (!duplicate) {
-                require(existing.size < MAX_RULES) { "规则数量过多" }
-                preferences[documentKey] = RuleDocument(existing + rule).toJson()
-                added = true
-            }
+            val candidateRules = if (duplicate) existing else existing + rule
+            val normalized = keepHighestPriorityRules(candidateRules)
+            require(normalized.size <= MAX_RULES) { "规则数量过多" }
+            if (normalized != existing) preferences[documentKey] = RuleDocument(normalized).toJson()
+            added = !duplicate && normalized.any { it.id == rule.id }
         }
         return added
     }
     suspend fun setPaused(paused: Boolean) { context.ruleDataStore.edit { it[pausedKey] = paused } }
-    suspend fun setLogging(enabled: Boolean) { context.ruleDataStore.edit { it[loggingKey] = enabled } }
     suspend fun appendLog(message: String) { context.ruleDataStore.edit { preferences ->
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         val line = "$timestamp $message\n"
         preferences[logKey] = ((preferences[logKey] ?: "") + line).takeLast(64 * 1024)
     } }
     suspend fun clearLogs() { context.ruleDataStore.edit { it.remove(logKey) } }
+
+    private fun keepHighestPriorityRules(rules: List<SkipRule>): List<SkipRule> = rules
+        .groupBy { it.packageName }
+        .map { (_, packageRules) ->
+            val highestPriority = packageRules.maxOf { it.source.priority() }
+            packageRules.last { it.source.priority() == highestPriority }
+        }
 
     private fun formatStoredLogs(raw: String): String {
         if (raw.isBlank()) return raw

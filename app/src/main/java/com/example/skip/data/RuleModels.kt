@@ -5,11 +5,19 @@ import org.json.JSONObject
 import java.util.UUID
 
 const val RULE_FORMAT_VERSION = 1
-const val MAX_RULES = 100
+const val MAX_RULES = 1_000
 const val MAX_FIELD_LENGTH = 160
 const val MAX_RULE_DOCUMENT_LENGTH = 256 * 1024
 
 enum class RuleAction { CLICK, PARENT_CLICK, BACK }
+enum class RuleSource { INITIAL, MANUAL, CAPTURE, IMPORT }
+
+fun RuleSource.priority(): Int = when (this) {
+    RuleSource.INITIAL -> 0
+    RuleSource.IMPORT -> 1
+    RuleSource.MANUAL -> 2
+    RuleSource.CAPTURE -> 3
+}
 
 data class SkipRule(
     val id: String = UUID.randomUUID().toString(),
@@ -22,7 +30,8 @@ data class SkipRule(
     val pageMustContain: String = "",
     val pageMustNotContain: String = "",
     val action: RuleAction = RuleAction.CLICK,
-    val retryLimit: Int = 1
+    val retryLimit: Int = 1,
+    val source: RuleSource = RuleSource.MANUAL
 ) {
     fun validate(): String? {
         if (!PACKAGE_REGEX.matches(packageName)) return "包名无效"
@@ -38,13 +47,13 @@ data class SkipRule(
         put("id", id); put("enabled", enabled); put("packageName", packageName)
         put("viewId", viewId); put("text", text); put("contentDescription", contentDescription)
         put("className", className); put("pageMustContain", pageMustContain); put("pageMustNotContain", pageMustNotContain)
-        put("action", action.name); put("retryLimit", retryLimit)
+        put("action", action.name); put("retryLimit", retryLimit); put("source", source.name)
     }
 
     companion object {
         private val PACKAGE_REGEX = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
         fun fromJson(json: JSONObject): SkipRule {
-            val allowed = setOf("id", "enabled", "packageName", "viewId", "text", "contentDescription", "className", "pageMustContain", "pageMustNotContain", "action", "retryLimit")
+            val allowed = setOf("id", "enabled", "packageName", "viewId", "text", "contentDescription", "className", "pageMustContain", "pageMustNotContain", "action", "retryLimit", "source")
             require(json.keys().asSequence().all { it in allowed }) { "包含未知规则字段" }
             fun string(name: String): String {
                 val value = if (json.has(name)) json.get(name) else ""
@@ -63,7 +72,8 @@ data class SkipRule(
                 packageName = string("packageName"), viewId = string("viewId"), text = string("text"),
                 contentDescription = string("contentDescription"), className = string("className"),
                 pageMustContain = string("pageMustContain"), pageMustNotContain = string("pageMustNotContain"),
-                action = RuleAction.valueOf(string("action")), retryLimit = retryLimit
+                action = RuleAction.valueOf(string("action")), retryLimit = retryLimit,
+                source = if (json.has("source")) RuleSource.valueOf(string("source")) else RuleSource.MANUAL
             )
             require(rule.validate() == null) { rule.validate() ?: "规则无效" }
             return rule
@@ -74,7 +84,7 @@ data class SkipRule(
 data class RuleDocument(val rules: List<SkipRule>) {
     fun toJson(): String = JSONObject().put("version", RULE_FORMAT_VERSION).put("rules", JSONArray(rules.map { it.toJson() })).toString(2)
     companion object {
-        fun parse(raw: String, forceDisabled: Boolean = false): List<SkipRule> {
+        fun parse(raw: String, forceEnabled: Boolean = false): List<SkipRule> {
             require(raw.length <= MAX_RULE_DOCUMENT_LENGTH) { "规则文件过大" }
             val root = JSONObject(raw)
             require(root.length() == 2 && root.optInt("version", -1) == RULE_FORMAT_VERSION) { "不支持的规则文件" }
@@ -82,7 +92,7 @@ data class RuleDocument(val rules: List<SkipRule>) {
             require(array.length() <= MAX_RULES) { "规则数量过多" }
             val parsed = buildList { for (i in 0 until array.length()) {
                 val rule = SkipRule.fromJson(array.getJSONObject(i))
-                add(if (forceDisabled) rule.copy(enabled = false) else rule)
+                add(if (forceEnabled) rule.copy(enabled = true, source = RuleSource.IMPORT) else rule)
             } }
             require(parsed.map { it.id }.distinct().size == parsed.size) { "规则 ID 不能重复" }
             return parsed
