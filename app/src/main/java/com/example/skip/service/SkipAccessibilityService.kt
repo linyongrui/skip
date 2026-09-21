@@ -86,8 +86,6 @@ class SkipAccessibilityService : AccessibilityService() {
             }
         } catch (_: RuntimeException) {
             // Fail open: accessibility events must never interfere with the foreground app.
-        } finally {
-            if (nodes == null) root.recycle() else nodes!!.forEach { runCatching { it.recycle() } }
         }
     }
 
@@ -151,8 +149,6 @@ class SkipAccessibilityService : AccessibilityService() {
             }
         } catch (_: RuntimeException) {
             NodeDebugStore.publish("无法读取当前界面节点。")
-        } finally {
-            if (nodes == null) root.recycle() else nodes!!.forEach { runCatching { it.recycle() } }
         }
     }
 
@@ -160,10 +156,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val result = ArrayList<AccessibilityNodeInfo>(maxNodes)
         val startedAt = SystemClock.elapsedRealtime()
         fun visit(node: AccessibilityNodeInfo, depth: Int) {
-            if (depth > maxDepth || result.size >= maxNodes || SystemClock.elapsedRealtime() - startedAt >= SCAN_TIMEOUT_MS) {
-                node.recycle()
-                return
-            }
+            if (depth > maxDepth || result.size >= maxNodes || SystemClock.elapsedRealtime() - startedAt >= SCAN_TIMEOUT_MS) return
             result.add(node)
             if (depth >= maxDepth) return
             for (index in 0 until node.childCount) {
@@ -225,14 +218,11 @@ class SkipAccessibilityService : AccessibilityService() {
         repeat(MAX_ANCESTORS) { depth ->
             val candidate = current ?: return@repeat
             if (depth > 0 && candidate.isVisibleToUser && candidate.isEnabled && candidate.isClickable && candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                runCatching { candidate.recycle() }
                 return true
             }
             val parent = candidate.parent
-            if (depth > 0) runCatching { candidate.recycle() }
             current = parent
         }
-        current?.let { if (it !== node) runCatching { it.recycle() } }
         return false
     }
 

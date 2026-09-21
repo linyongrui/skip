@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,7 +34,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -144,9 +145,10 @@ private fun SkipApp(serviceEnabled: Boolean) {
     StatusRow("无障碍服务", if (serviceEnabled) "已开启" else "未开启")
     StatusRow("自动跳过", if (settings.paused) "已暂停" else "运行中")
     StatusRow("已启用规则", rules.count { it.enabled }.toString())
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        Button(onClick = onOpenSettings, modifier = Modifier.weight(1f)) { Text("打开无障碍设置") }
-        Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) { Text("全局暂停"); Switch(checked = settings.paused, onCheckedChange = onPause) }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = onOpenSettings) { Text("无障碍设置") }
+        Spacer(Modifier.weight(1f))
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) { Text("全局暂停"); Switch(checked = settings.paused, onCheckedChange = onPause) }
     }
     OutlinedButton(onClick = onRules, modifier = Modifier.fillMaxWidth()) { Text("规则（${rules.size}）") }
     OutlinedButton(onClick = onDebug, modifier = Modifier.fillMaxWidth()) { Text("节点树调试") }
@@ -169,10 +171,11 @@ private fun SkipApp(serviceEnabled: Boolean) {
             .any { it?.contains(query, true) == true }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = { showResetConfirmation = true }, modifier = Modifier.weight(1f)) { Text("重置规则") }
-        Button(onClick = onAdd, modifier = Modifier.weight(1f)) { Text("添加规则") }
+        OutlinedButton(onClick = { showResetConfirmation = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("重置", maxLines = 1) }
+        Button(onClick = onAdd, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("添加", maxLines = 1) }
+        OutlinedButton(onClick = onImportFile, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("导入", maxLines = 1) }
+        OutlinedButton(onClick = onExportFile, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("导出", maxLines = 1) }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) { OutlinedButton(onClick = onImportFile, modifier = Modifier.weight(1f)) { Text("从文件导入") }; OutlinedButton(onClick = onExportFile, modifier = Modifier.weight(1f)) { Text("导出到文件") } }
     Field("搜索应用、包名、文本或来源", query) { query = it }
     if (visibleRules.isEmpty()) Text("没有匹配的规则。", style = MaterialTheme.typography.bodySmall)
     visibleRules.forEach { rule -> Card(modifier = Modifier.fillMaxWidth().clickable { onEdit(rule) }) { Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(appLabels[rule.packageName] ?: rule.packageName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("(${rule.source.displayName()}) ${rule.action.displayName()} ${rule.text.ifBlank { rule.contentDescription.ifBlank { "-" } }}", style = MaterialTheme.typography.bodySmall, maxLines = 1) }; Switch(checked = rule.enabled, onCheckedChange = { onToggle(rule, it) }); TextButton(onClick = { pendingDelete = rule }) { Text("删除") } } } }
@@ -194,7 +197,7 @@ private fun SkipApp(serviceEnabled: Boolean) {
     if (showAppPicker) InstalledAppPicker(onDismiss = { showAppPicker = false }, onSelected = { selectedApp = it; showAppPicker = false })
 }
 
-@Composable private fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composable () -> Unit) = Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) { Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { Text(title, style = MaterialTheme.typography.headlineMedium); onBack?.let { TextButton(onClick = it) { Text("返回") } } }; Divider(); content() }
+@Composable private fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composable () -> Unit) = Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) { Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { Text(title, style = MaterialTheme.typography.headlineMedium); onBack?.let { TextButton(onClick = it) { Text("返回") } } }; HorizontalDivider(); content() }
 @Composable private fun StatusRow(label: String, value: String) = Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { Text(label); Text(value) }
 
 @Composable private fun RuleEditor(rule: SkipRule, onDismiss: () -> Unit, onSave: (SkipRule) -> Unit) {
