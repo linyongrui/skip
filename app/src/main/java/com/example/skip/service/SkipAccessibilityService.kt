@@ -200,7 +200,8 @@ class SkipAccessibilityService : AccessibilityService() {
                     viewId = viewId,
                     text = text.orEmpty(),
                     contentDescription = description.orEmpty(),
-                    action = RuleAction.CLICK
+                    action = RuleAction.CLICK,
+                    retryLimit = 0
                 )
             }
         }

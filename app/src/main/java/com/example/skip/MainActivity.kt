@@ -122,10 +122,10 @@ private fun SkipApp(serviceEnabled: Boolean) {
     }
     Scaffold(modifier = Modifier.fillMaxSize()) { padding -> Column(Modifier.padding(padding)) {
         when (screen) {
-            "rules" -> RulesScreen(rules, onBack = { screen = "home" }, onAdd = { editing = SkipRule(enabled = true, packageName = "", text = "跳过") }, onReset = {
+            "rules" -> RulesScreen(rules, onBack = { screen = "home" }, onAdd = { editing = SkipRule(enabled = true, packageName = "", text = "跳过", retryLimit = 0) }, onReset = {
                 scope.launch {
                     val initialRules = withContext(Dispatchers.Default) {
-                        loadInstalledApps(context).filterNot { it.isSystem }.map { app ->
+                        loadInstalledApps(context).filterNot { it.isSystem || isProtectedResetApp(it) }.map { app ->
                             SkipRule(enabled = true, packageName = app.packageName, text = "跳过", action = RuleAction.CLICK, retryLimit = 0, source = RuleSource.INITIAL)
                         }
                     }
@@ -134,11 +134,11 @@ private fun SkipApp(serviceEnabled: Boolean) {
                         .onFailure { showMessage(context, it.message ?: "重置规则失败") }
                 }
             }, onEdit = { editing = it }, onToggle = { rule, enabled -> scope.launch { repository.saveRules(rules.map { if (it.id == rule.id) it.copy(enabled = enabled) else it }) } }, onDelete = { rule -> scope.launch { repository.saveRules(rules.filterNot { it.id == rule.id }) } }, onImportFile = { importFile.launch(arrayOf("application/json", "text/plain")) }, onExportFile = { exportFile.launch("跳过规则.json") })
-            "debug" -> DebugScreen(onBack = { screen = "home" })
+            "debug" -> DebugScreen(rules = rules, onBack = { screen = "home" })
             else -> HomeScreen(rules, settings, serviceEnabled, onOpenSettings = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, onPause = { scope.launch { repository.setPaused(it) } }, onRules = { screen = "rules" }, onDebug = { screen = "debug" }, onClearLogs = { scope.launch { repository.clearLogs() } }, logs = logs)
         }
     } }
-    editing?.let { original -> RuleEditor(original, onDismiss = { editing = null }, onSave = { candidate -> scope.launch { repository.saveRules(if (rules.any { it.id == candidate.id }) rules.map { if (it.id == candidate.id) candidate else it } else rules + candidate); editing = null } }) }
+    editing?.let { original -> RuleEditor(original, rules.filter { it.id != original.id }.map { it.packageName }.toSet(), onDismiss = { editing = null }, onSave = { candidate -> scope.launch { repository.saveRules(if (rules.any { it.id == candidate.id }) rules.map { if (it.id == candidate.id) candidate else it } else rules + candidate); editing = null } }) }
 }
 
 @Composable private fun HomeScreen(rules: List<SkipRule>, settings: AppSettings, serviceEnabled: Boolean, onOpenSettings: () -> Unit, onPause: (Boolean) -> Unit, onRules: () -> Unit, onDebug: () -> Unit, onClearLogs: () -> Unit, logs: String) = Page("跳过") {
@@ -183,7 +183,7 @@ private fun SkipApp(serviceEnabled: Boolean) {
     if (showResetConfirmation) AlertDialog(onDismissRequest = { showResetConfirmation = false }, title = { Text("重置所有规则？") }, text = { Text("这会移除所有现有规则，并为全部非系统应用添加一条“文本：跳过、动作：点击一次”的初始规则。此操作无法撤销。") }, confirmButton = { TextButton(onClick = { showResetConfirmation = false; onReset() }) { Text("确认重置") } }, dismissButton = { TextButton(onClick = { showResetConfirmation = false }) { Text("取消") } })
 }
 
-@Composable private fun DebugScreen(onBack: () -> Unit) {
+@Composable private fun DebugScreen(rules: List<SkipRule>, onBack: () -> Unit) {
     val snapshot by NodeDebugStore.snapshot.collectAsState()
     var selectedApp by remember { mutableStateOf<InstalledApp?>(null) }
     var showAppPicker by remember { mutableStateOf(false) }
@@ -194,16 +194,17 @@ private fun SkipApp(serviceEnabled: Boolean) {
         Button(onClick = { NodeDebugStore.requestSnapshot(selectedApp!!.packageName) }, enabled = selectedApp != null, modifier = Modifier.fillMaxWidth()) { Text("显示悬浮抓取按钮") }
         Text(snapshot, style = MaterialTheme.typography.bodySmall)
     }
-    if (showAppPicker) InstalledAppPicker(onDismiss = { showAppPicker = false }, onSelected = { selectedApp = it; showAppPicker = false })
+    if (showAppPicker) InstalledAppPicker(excludedPackages = rules.map { it.packageName }.toSet(), onDismiss = { showAppPicker = false }, onSelected = { selectedApp = it; showAppPicker = false })
 }
 
 @Composable private fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composable () -> Unit) = Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) { Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { Text(title, style = MaterialTheme.typography.headlineMedium); onBack?.let { TextButton(onClick = it) { Text("返回") } } }; HorizontalDivider(); content() }
 @Composable private fun StatusRow(label: String, value: String) = Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { Text(label); Text(value) }
 
-@Composable private fun RuleEditor(rule: SkipRule, onDismiss: () -> Unit, onSave: (SkipRule) -> Unit) {
+@Composable private fun RuleEditor(rule: SkipRule, excludedPackages: Set<String>, onDismiss: () -> Unit, onSave: (SkipRule) -> Unit) {
     val context = LocalContext.current
     var packageName by remember { mutableStateOf(rule.packageName) }; var viewId by remember { mutableStateOf(rule.viewId) }; var text by remember { mutableStateOf(rule.text) }; var description by remember { mutableStateOf(rule.contentDescription) }; var className by remember { mutableStateOf(rule.className) }; var required by remember { mutableStateOf(rule.pageMustContain) }; var forbidden by remember { mutableStateOf(rule.pageMustNotContain) }; var retry by remember { mutableStateOf(rule.retryLimit.toString()) }; var action by remember { mutableStateOf(rule.action) }; var error by remember { mutableStateOf("") }
-    var showAppPicker by remember { mutableStateOf(false) }
+    var showAppPicker by remember { mutableStateOf(rule.packageName.isBlank()) }
+    var selectedFromInstalledApps by remember { mutableStateOf(rule.packageName.isNotBlank()) }
     var showActionMenu by remember { mutableStateOf(false) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("规则") }, text = { Column(Modifier.verticalScroll(rememberScrollState())) {
         val selectedAppName = remember(packageName) { packageName.takeIf { it.isNotBlank() }?.let { value -> runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(value, 0)).toString() }.getOrDefault(value) } }
@@ -222,18 +223,18 @@ private fun SkipApp(serviceEnabled: Boolean) {
             }
         }
         Field("重试次数（0-2）", retry, KeyboardType.Number) { retry = it }; if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-    } }, confirmButton = { TextButton(onClick = { val candidate = rule.copy(packageName = packageName.trim(), viewId = viewId, text = text, contentDescription = description, className = className, pageMustContain = required, pageMustNotContain = forbidden, action = action, retryLimit = retry.toIntOrNull() ?: -1); error = candidate.validate() ?: ""; if (error.isBlank()) onSave(candidate) }) { Text("保存") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
-    if (showAppPicker) InstalledAppPicker(onDismiss = { showAppPicker = false }, onSelected = { packageName = it.packageName; showAppPicker = false })
+    } }, confirmButton = { TextButton(onClick = { val candidate = rule.copy(packageName = packageName.trim(), viewId = viewId, text = text, contentDescription = description, className = className, pageMustContain = required, pageMustNotContain = forbidden, action = action, retryLimit = retry.toIntOrNull() ?: -1); error = if (rule.packageName.isBlank() && !selectedFromInstalledApps) "请先选择已安装应用" else candidate.validate() ?: ""; if (error.isBlank()) onSave(candidate) }) { Text("保存") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+    if (showAppPicker) InstalledAppPicker(excludedPackages = excludedPackages, onDismiss = { showAppPicker = false }, onSelected = { packageName = it.packageName; selectedFromInstalledApps = true; showAppPicker = false })
 }
 
 private data class InstalledApp(val label: String, val packageName: String, val isSystem: Boolean)
 
-@Composable private fun InstalledAppPicker(onDismiss: () -> Unit, onSelected: (InstalledApp) -> Unit) {
+@Composable private fun InstalledAppPicker(excludedPackages: Set<String> = emptySet(), onDismiss: () -> Unit, onSelected: (InstalledApp) -> Unit) {
     val context = LocalContext.current
     val apps by produceState<List<InstalledApp>?>(initialValue = null, context) { value = withContext(Dispatchers.Default) { loadInstalledApps(context) } }
     var query by remember { mutableStateOf("") }
     var showSystemApps by remember { mutableStateOf(false) }
-    val visibleApps = (apps ?: emptyList()).filter { app -> (showSystemApps || !app.isSystem) && (query.isBlank() || app.label.contains(query, true) || app.packageName.contains(query, true)) }
+    val visibleApps = (apps ?: emptyList()).filter { app -> app.packageName !in excludedPackages && (showSystemApps || !app.isSystem) && (query.isBlank() || app.label.contains(query, true) || app.packageName.contains(query, true)) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("选择已安装应用") }, text = {
         Column {
             Field("按名称或包名搜索", query) { query = it }
@@ -256,6 +257,19 @@ private fun loadInstalledApps(context: Context): List<InstalledApp> {
         .distinctBy { it.packageName }
         .sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
 }
+
+private fun isProtectedResetApp(app: InstalledApp): Boolean {
+    val identity = "${app.label} ${app.packageName}".lowercase()
+    val keywords = listOf(
+        "微信", "wechat", "支付宝", "alipay", "银行", "bank", "证券", "基金", "股票", "交易",
+        "finance", "trading", "密码", "password", "身份认证", "认证器", "authenticator", "identity", "otp", "token",
+        "icbc", "ccb", "abchina", "bankofchina", "cmbchina", "psbc", "bankcomm", "cib", "spdb", "citic",
+        "cebbank", "hxb", "cmbc", "pingan", "eastmoney", "xueqiu", "guotai", "haitong", "huatai", "galaxy",
+        "csc", "cinda", "cms", "1password", "bitwarden", "keepass", "enpass"
+    )
+    return keywords.any(identity::contains)
+}
+
 @Composable private fun Field(label: String, value: String, type: KeyboardType = KeyboardType.Text, update: (String) -> Unit) {
     val state = rememberTextFieldState(value)
     LaunchedEffect(value) {
