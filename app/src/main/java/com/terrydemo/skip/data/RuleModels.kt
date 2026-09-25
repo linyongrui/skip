@@ -45,11 +45,12 @@ data class SkipRule(
         return null
     }
 
-    fun toJson() = JSONObject().apply {
+    fun toJson(includeRuntime: Boolean = true) = JSONObject().apply {
         put("id", id); put("enabled", enabled); put("packageName", packageName)
         put("viewId", viewId); put("text", text); put("contentDescription", contentDescription)
         put("className", className); put("pageMustContain", pageMustContain); put("pageMustNotContain", pageMustNotContain)
-        put("action", action.name); put("executionLimit", executionLimit); put("successCount", successCount); put("source", source.name)
+        put("action", action.name); put("executionLimit", executionLimit)
+        if (includeRuntime) { put("successCount", successCount); put("source", source.name) }
     }
 
     companion object {
@@ -84,7 +85,8 @@ data class SkipRule(
                 packageName = string("packageName"), viewId = string("viewId"), text = string("text"),
                 contentDescription = string("contentDescription"), className = string("className"),
                 pageMustContain = string("pageMustContain"), pageMustNotContain = string("pageMustNotContain"),
-                action = RuleAction.valueOf(string("action")), executionLimit = executionLimit, successCount = successCount,
+                action = RuleAction.valueOf(string("action")), executionLimit = executionLimit,
+                successCount = if (json.has("successCount")) successCount else 0,
                 source = if (json.has("source")) RuleSource.valueOf(string("source")) else RuleSource.MANUAL
             )
             require(rule.validate() == null) { rule.validate() ?: "规则无效" }
@@ -94,7 +96,7 @@ data class SkipRule(
 }
 
 data class RuleDocument(val rules: List<SkipRule>) {
-    fun toJson(): String = JSONObject().put("version", RULE_FORMAT_VERSION).put("rules", JSONArray(rules.map { it.toJson() })).toString(2)
+    fun toJson(includeRuntime: Boolean = true): String = JSONObject().put("version", RULE_FORMAT_VERSION).put("rules", JSONArray(rules.map { it.toJson(includeRuntime) })).toString(2)
     companion object {
         fun parse(raw: String, forceEnabled: Boolean = false): List<SkipRule> {
             require(raw.length <= MAX_RULE_DOCUMENT_LENGTH) { "规则文件过大" }

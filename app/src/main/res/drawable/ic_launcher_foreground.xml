@@ -2,14 +2,14 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
     <!-- Rounded frame from the supplied reference icon. -->
-    <path android:fillType="evenOdd" android:fillColor="#10B8B5"
+    <path android:fillType="evenOdd" android:fillColor="#0283EF"
         android:pathData="M25,8 L83,8 Q100,8 100,25 L100,83 Q100,100 83,100 L25,100 Q8,100 8,83 L8,25 Q8,8 25,8 Z M25,15 Q15,15 15,25 L15,83 Q15,93 25,93 L83,93 Q93,93 93,83 L93,25 Q93,15 83,15 Z" />
     <!-- Clear AD lettering for advertising. -->
-    <path android:fillColor="#10B8B5" android:pathData="M23,77 L32,40 L41,40 L50,77 L43,77 L41,68 L31,68 L29,77 Z M33,62 L39,62 L36,48 Z" />
-    <path android:fillType="evenOdd" android:fillColor="#10B8B5" android:pathData="M55,40 L65,40 Q82,40 82,58.5 Q82,77 65,77 L55,77 Z M62,47 L65,47 Q75,47 75,58.5 Q75,70 65,70 L62,70 Z" />
+    <path android:fillColor="#0283EF" android:pathData="M23,77 L32,40 L41,40 L50,77 L43,77 L41,68 L31,68 L29,77 Z M33,62 L39,62 L36,48 Z" />
+    <path android:fillType="evenOdd" android:fillColor="#0283EF" android:pathData="M55,40 L65,40 Q82,40 82,58.5 Q82,77 65,77 L55,77 Z M62,47 L65,47 Q75,47 75,58.5 Q75,70 65,70 L62,70 Z" />
     <!-- Light diagonal skip slash. -->
-    <path android:fillColor="#A6EBDD" android:pathData="M21,82 L75,25 Q78,22 81,25 Q84,28 81,31 L27,88 Q24,91 21,88 Q18,85 21,82 Z" />
+    <path android:fillColor="#4EA5ED" android:pathData="M21,82 L75,25 Q78,22 81,25 Q84,28 81,31 L27,88 Q24,91 21,88 Q18,85 21,82 Z" />
     <!-- Double next arrows in the lower-right corner. -->
-    <path android:fillColor="#A6EBDD" android:pathData="M66,76 L71,76 L79,82 L71,88 L66,88 L74,82 Z" />
-    <path android:fillColor="#10B8B5" android:pathData="M77,76 L82,76 L90,82 L82,88 L77,88 L85,82 Z" />
+    <path android:fillColor="#4EA5ED" android:pathData="M66,76 L71,76 L79,82 L71,88 L66,88 L74,82 Z" />
+    <path android:fillColor="#0283EF" android:pathData="M77,76 L82,76 L90,82 L82,88 L77,88 L85,82 Z" />
 </vector>
