@@ -67,6 +67,9 @@ class SkipAccessibilityService : AccessibilityService() {
         if (root.packageName?.toString() != packageName) return
         var nodes: List<AccessibilityNodeInfo>? = null
         try {
+            // The accessibility tree can be replaced while an ad is animating.
+            // Refreshing the root before traversal avoids acting on a stale snapshot.
+            runCatching { root.refresh() }
             nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
             val scannedNodes = nodes ?: return
             val sensitivePage = isSensitivePage(scannedNodes)
@@ -83,12 +86,17 @@ class SkipAccessibilityService : AccessibilityService() {
             val now = System.currentTimeMillis()
             if (now - lastExecutionAt < COOLDOWN_MS) return
             val candidates = scannedNodes.filter { matchesNode(rule, it) }
+                .sortedWith(compareByDescending<AccessibilityNodeInfo> { it === event.source }
+                    .thenByDescending { it.isClickable }
+                    .thenByDescending { it.isVisibleToUser })
             if (candidates.isEmpty()) return
             // A matching label can be a non-clickable child while its button,
             // or another matching node, is actionable. Try each safe candidate
             // before waiting for another accessibility event.
             val success = when (rule.action) {
-                RuleAction.CLICK -> candidates.any { it.isVisibleToUser && it.isEnabled && it.isClickable && it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
+                RuleAction.CLICK -> candidates.any {
+                    performSafeClick(it)
+                }
                 RuleAction.PARENT_CLICK -> candidates.any { it.isVisibleToUser && it.isEnabled && clickAncestor(it) }
                 RuleAction.BACK -> rule.pageMustContain.isNotBlank() && performGlobalAction(GLOBAL_ACTION_BACK)
             }
@@ -236,13 +244,21 @@ class SkipAccessibilityService : AccessibilityService() {
         var current: AccessibilityNodeInfo? = node
         repeat(MAX_ANCESTORS) { depth ->
             val candidate = current ?: return@repeat
-            if (depth > 0 && candidate.isVisibleToUser && candidate.isEnabled && candidate.isClickable && candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            if (depth > 0 && performSafeClick(candidate)) {
                 return true
             }
             val parent = candidate.parent
             current = parent
         }
         return false
+    }
+
+    private fun performSafeClick(node: AccessibilityNodeInfo): Boolean {
+        if (!node.isVisibleToUser || !node.isEnabled || !node.isClickable) return false
+        // refresh() returning false only means that no newer snapshot was
+        // available; the node may still be valid and should still be tried.
+        runCatching { node.refresh() }
+        return runCatching { node.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
     }
 
     private fun describe(node: AccessibilityNodeInfo): String = "${node.className ?: "?"} 视图ID=${node.viewIdResourceName ?: "-"} 文本=${node.text ?: "-"} 内容描述=${node.contentDescription ?: "-"} 可点击=${node.isClickable}"
@@ -258,7 +274,7 @@ class SkipAccessibilityService : AccessibilityService() {
         const val MAX_ANCESTORS = 3
         const val COOLDOWN_MS = 120L
         const val SCAN_INTERVAL_MS = 35L
-        const val SCAN_TIMEOUT_MS = 80L
+        const val SCAN_TIMEOUT_MS = 100L
         const val MAX_TRANSIENT_FAILURE_RETRIES = 1
         const val TRANSIENT_FAILURE_WINDOW_MS = 600L
     }

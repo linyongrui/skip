@@ -268,7 +268,8 @@ private fun loadInstalledApps(context: Context): List<InstalledApp> {
 
 private fun isProtectedResetApp(app: InstalledApp): Boolean {
     val packageName = app.packageName.lowercase()
-    if (packageName.startsWith("com.coloros") || packageName.startsWith("com.oplus")
+    if (packageName.startsWith("com.google") || packageName.startsWith("com.android")
+        || packageName.startsWith("com.coloros") || packageName.startsWith("com.oplus")
         || packageName.startsWith("andes.oplus") || packageName.startsWith("com.oneplus")) return true
     val identity = "${app.label} $packageName".lowercase()
     val keywords = listOf(
