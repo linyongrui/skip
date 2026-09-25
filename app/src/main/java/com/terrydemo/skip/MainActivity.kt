@@ -3,8 +3,11 @@ package com.terrydemo.skip
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
+import android.content.ComponentName
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
@@ -79,13 +82,26 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private var serviceEnabled = mutableStateOf(false)
+    private val statusHandler = Handler(Looper.getMainLooper())
+    private val delayedStatusRefresh = Runnable { serviceEnabled.value = isServiceEnabled(this) }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         serviceEnabled.value = isServiceEnabled(this)
         enableEdgeToEdge()
         setContent { SkipTheme { SkipApp(serviceEnabled.value) } }
     }
-    override fun onResume() { super.onResume(); serviceEnabled.value = isServiceEnabled(this) }
+    override fun onResume() {
+        super.onResume()
+        statusHandler.removeCallbacks(delayedStatusRefresh)
+        serviceEnabled.value = isServiceEnabled(this)
+        // The system may refresh AccessibilityManager a little after the
+        // Activity resumes, especially after the task was cleared.
+        statusHandler.postDelayed(delayedStatusRefresh, 350L)
+    }
+    override fun onDestroy() {
+        statusHandler.removeCallbacks(delayedStatusRefresh)
+        super.onDestroy()
+    }
 }
 
 @Composable
@@ -336,5 +352,20 @@ private fun isProtectedResetApp(app: InstalledApp): Boolean {
 @Composable private fun compactFieldPadding() = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
 private fun RuleAction.displayName() = when (this) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级"; RuleAction.BACK -> "系统返回" }
 private fun RuleSource.displayName() = when (this) { RuleSource.INITIAL -> "初始"; RuleSource.MANUAL -> "手动"; RuleSource.CAPTURE -> "抓取"; RuleSource.IMPORT -> "导入" }
-private fun isServiceEnabled(context: Context): Boolean = (context.getSystemService(AccessibilityManager::class.java)?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK) ?: emptyList()).any { it.resolveInfo.serviceInfo.packageName == context.packageName && it.resolveInfo.serviceInfo.name == "${context.packageName}.service.SkipAccessibilityService" }
+private fun isServiceEnabled(context: Context): Boolean {
+    val component = ComponentName(context, "${context.packageName}.service.SkipAccessibilityService").flattenToString()
+    val enabledServices = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ).orEmpty()
+    if (enabledServices.split(':').any { it.equals(component, ignoreCase = true) }) return true
+
+    // Fallback for devices that do not expose the secure setting immediately.
+    return (context.getSystemService(AccessibilityManager::class.java)
+        ?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        ?: emptyList()).any {
+        it.resolveInfo.serviceInfo.packageName == context.packageName &&
+            it.resolveInfo.serviceInfo.name == "${context.packageName}.service.SkipAccessibilityService"
+    }
+}
 private fun showMessage(context: Context, message: String) { Toast.makeText(context, message, Toast.LENGTH_SHORT).show() }
