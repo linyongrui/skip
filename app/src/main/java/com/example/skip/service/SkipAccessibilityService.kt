@@ -79,7 +79,7 @@ class SkipAccessibilityService : AccessibilityService() {
             val failedAt = lastFailureAt[attemptKey] ?: 0L
             val recoveryRetry = failureCount < MAX_TRANSIENT_FAILURE_RETRIES &&
                 eventNow - failedAt <= TRANSIENT_FAILURE_WINDOW_MS
-            if (count > rule.retryLimit && !recoveryRetry) return
+            if (count >= rule.executionLimit && !recoveryRetry) return
             val now = System.currentTimeMillis()
             if (now - lastExecutionAt < COOLDOWN_MS) return
             val candidates = scannedNodes.filter { matchesNode(rule, it) }
@@ -96,6 +96,7 @@ class SkipAccessibilityService : AccessibilityService() {
             if (success) {
                 completedPages.add(windowKey); transientFailures.remove(attemptKey); lastFailureAt.remove(attemptKey); lastExecutionAt = now
                 val appLabel = applicationLabel(packageName)
+                scope.launch { repository.recordSuccess(rule.id) }
                 scope.launch { repository.appendLog("已对 $appLabel 执行${actionLabel(rule.action)}") }
             } else {
                 transientFailures[attemptKey] = failureCount + 1
@@ -218,7 +219,7 @@ class SkipAccessibilityService : AccessibilityService() {
                     text = text.orEmpty(),
                     contentDescription = description.orEmpty(),
                     action = RuleAction.CLICK,
-                    retryLimit = 0
+                    executionLimit = 1
                 )
             }
         }

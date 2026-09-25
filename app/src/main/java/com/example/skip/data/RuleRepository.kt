@@ -52,6 +52,13 @@ class RuleRepository(private val context: Context) {
         }
         return added
     }
+    suspend fun recordSuccess(ruleId: String) {
+        context.ruleDataStore.edit { preferences ->
+            val existing = RuleDocument.parse(preferences[documentKey] ?: "{\"version\":1,\"rules\":[]}")
+            val updated = existing.map { if (it.id == ruleId) it.copy(successCount = it.successCount + 1) else it }
+            if (updated != existing) preferences[documentKey] = RuleDocument(updated).toJson()
+        }
+    }
     suspend fun setPaused(paused: Boolean) { context.ruleDataStore.edit { it[pausedKey] = paused } }
     suspend fun appendLog(message: String) { context.ruleDataStore.edit { preferences ->
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
