@@ -27,6 +27,8 @@ class SkipAccessibilityService : AccessibilityService() {
     @Volatile private var rules: List<SkipRule> = emptyList()
     @Volatile private var settings = AppSettings()
     private val attempts = ConcurrentHashMap<String, Int>()
+    private val transientFailures = ConcurrentHashMap<String, Int>()
+    private val lastFailureAt = ConcurrentHashMap<String, Long>()
     private val completedPages = ConcurrentHashMap.newKeySet<String>()
     private var lastExecutionAt = 0L
     private var lastWindowKey = ""
@@ -51,14 +53,18 @@ class SkipAccessibilityService : AccessibilityService() {
         val activeRules = rules.filter { it.enabled && it.packageName == packageName }
         if (activeRules.isEmpty()) return
         val windowKey = "$packageName:${event.windowId}"
-        if (windowKey != lastWindowKey) {
-            completedPages.clear(); attempts.clear(); lastWindowKey = windowKey
+        // A new window-state event can represent a fresh page even when the
+        // platform reuses the same window id. Clear the one-shot guard so a
+        // rule can run again on the next app launch/page transition.
+        if (windowKey != lastWindowKey || event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            completedPages.clear(); attempts.clear(); transientFailures.clear(); lastFailureAt.clear(); lastWindowKey = windowKey
         }
         val eventNow = SystemClock.elapsedRealtime()
         if (windowKey == lastScanWindowKey && eventNow - lastScanAt < SCAN_INTERVAL_MS) return
         lastScanWindowKey = windowKey
         lastScanAt = eventNow
         val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != packageName) return
         var nodes: List<AccessibilityNodeInfo>? = null
         try {
             nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
@@ -66,23 +72,34 @@ class SkipAccessibilityService : AccessibilityService() {
             val sensitivePage = isSensitivePage(scannedNodes)
             if (settings.paused || completedPages.contains(windowKey)) return
             if (sensitivePage) return
-            val now = System.currentTimeMillis()
-            if (now - lastExecutionAt < COOLDOWN_MS) return
             val rule = activeRules.firstOrNull { matchesPage(it, scannedNodes) && scannedNodes.any { node -> matchesNode(it, node) } } ?: return
             val attemptKey = "$windowKey:${rule.id}"
             val count = attempts[attemptKey] ?: 0
-            if (count > rule.retryLimit) return
-            attempts[attemptKey] = count + 1
-            val target = scannedNodes.firstOrNull { matchesNode(rule, it) } ?: return
+            val failureCount = transientFailures[attemptKey] ?: 0
+            val failedAt = lastFailureAt[attemptKey] ?: 0L
+            val recoveryRetry = failureCount < MAX_TRANSIENT_FAILURE_RETRIES &&
+                eventNow - failedAt <= TRANSIENT_FAILURE_WINDOW_MS
+            if (count > rule.retryLimit && !recoveryRetry) return
+            val now = System.currentTimeMillis()
+            if (now - lastExecutionAt < COOLDOWN_MS) return
+            val candidates = scannedNodes.filter { matchesNode(rule, it) }
+            if (candidates.isEmpty()) return
+            // A matching label can be a non-clickable child while its button,
+            // or another matching node, is actionable. Try each safe candidate
+            // before waiting for another accessibility event.
             val success = when (rule.action) {
-                RuleAction.CLICK -> target.isClickable && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                RuleAction.PARENT_CLICK -> target.isVisibleToUser && clickAncestor(target)
+                RuleAction.CLICK -> candidates.any { it.isVisibleToUser && it.isEnabled && it.isClickable && it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
+                RuleAction.PARENT_CLICK -> candidates.any { it.isVisibleToUser && it.isEnabled && clickAncestor(it) }
                 RuleAction.BACK -> rule.pageMustContain.isNotBlank() && performGlobalAction(GLOBAL_ACTION_BACK)
             }
+            attempts[attemptKey] = count + 1
             if (success) {
-                completedPages.add(windowKey); lastExecutionAt = now
+                completedPages.add(windowKey); transientFailures.remove(attemptKey); lastFailureAt.remove(attemptKey); lastExecutionAt = now
                 val appLabel = applicationLabel(packageName)
                 scope.launch { repository.appendLog("已对 $appLabel 执行${actionLabel(rule.action)}") }
+            } else {
+                transientFailures[attemptKey] = failureCount + 1
+                lastFailureAt[attemptKey] = eventNow
             }
         } catch (_: RuntimeException) {
             // Fail open: accessibility events must never interfere with the foreground app.
@@ -234,5 +251,14 @@ class SkipAccessibilityService : AccessibilityService() {
     }.getOrDefault(packageName)
     private fun actionLabel(action: RuleAction) = when (action) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级"; RuleAction.BACK -> "系统返回" }
 
-    private companion object { const val MAX_DEPTH = 18; const val MAX_NODES = 250; const val MAX_ANCESTORS = 3; const val COOLDOWN_MS = 800L; const val SCAN_INTERVAL_MS = 250L; const val SCAN_TIMEOUT_MS = 150L }
+    private companion object {
+        const val MAX_DEPTH = 18
+        const val MAX_NODES = 250
+        const val MAX_ANCESTORS = 3
+        const val COOLDOWN_MS = 120L
+        const val SCAN_INTERVAL_MS = 35L
+        const val SCAN_TIMEOUT_MS = 80L
+        const val MAX_TRANSIENT_FAILURE_RETRIES = 1
+        const val TRANSIENT_FAILURE_WINDOW_MS = 600L
+    }
 }
