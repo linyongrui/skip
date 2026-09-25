@@ -1,4 +1,4 @@
-package com.example.skip
+package com.terrydemo.skip
 
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
@@ -62,15 +62,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.example.skip.data.AppSettings
-import com.example.skip.data.MAX_RULES
-import com.example.skip.data.RuleAction
-import com.example.skip.data.RuleDocument
-import com.example.skip.data.RuleRepository
-import com.example.skip.data.RuleSource
-import com.example.skip.data.SkipRule
-import com.example.skip.service.NodeDebugStore
-import com.example.skip.ui.theme.SkipTheme
+import com.terrydemo.skip.data.AppSettings
+import com.terrydemo.skip.data.MAX_RULES
+import com.terrydemo.skip.data.RuleAction
+import com.terrydemo.skip.data.RuleDocument
+import com.terrydemo.skip.data.RuleRepository
+import com.terrydemo.skip.data.RuleSource
+import com.terrydemo.skip.data.SkipRule
+import com.terrydemo.skip.service.NodeDebugStore
+import com.terrydemo.skip.ui.theme.SkipTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -270,7 +270,8 @@ private fun isProtectedResetApp(app: InstalledApp): Boolean {
     val packageName = app.packageName.lowercase()
     if (packageName.startsWith("com.google") || packageName.startsWith("com.android")
         || packageName.startsWith("com.coloros") || packageName.startsWith("com.oplus")
-        || packageName.startsWith("andes.oplus") || packageName.startsWith("com.oneplus")) return true
+        || packageName.startsWith("andes.oplus") || packageName.startsWith("com.oneplus")
+        || packageName.startsWith("com.terrydemo")) return true
     val identity = "${app.label} $packageName".lowercase()
     val keywords = listOf(
         "微信", "wechat", "支付宝", "alipay", "银行", "bank", "证券", "基金", "股票", "交易","数字人民币",

@@ -1,4 +1,4 @@
-package com.example.skip.service
+package com.terrydemo.skip.service
 
 import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope

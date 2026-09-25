@@ -1,4 +1,4 @@
-package com.example.skip.data
+package com.terrydemo.skip.data
 
 import org.json.JSONArray
 import org.json.JSONObject

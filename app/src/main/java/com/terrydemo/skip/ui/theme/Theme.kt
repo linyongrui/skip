@@ -1,4 +1,4 @@
-package com.example.skip.ui.theme
+package com.terrydemo.skip.ui.theme
 
 import android.app.Activity
 import android.os.Build

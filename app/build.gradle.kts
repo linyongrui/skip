@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.skip"
+    namespace = "com.terrydemo.skip"
     compileSdk {
         version = release(37) {
             minorApiLevel = 1
@@ -12,7 +12,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.skip"
+        applicationId = "com.terrydemo.skip"
         minSdk = 34
         versionCode = 1
         versionName = "1.0"

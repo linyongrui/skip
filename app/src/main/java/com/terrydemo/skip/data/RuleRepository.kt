@@ -1,4 +1,4 @@
-package com.example.skip.data
+package com.terrydemo.skip.data
 
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey

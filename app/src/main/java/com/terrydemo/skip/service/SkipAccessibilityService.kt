@@ -1,4 +1,4 @@
-package com.example.skip.service
+package com.terrydemo.skip.service
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.PixelFormat
@@ -8,11 +8,11 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.WindowManager
 import android.widget.Button
-import com.example.skip.data.AppSettings
-import com.example.skip.data.RuleRepository
-import com.example.skip.data.RuleAction
-import com.example.skip.data.SkipRule
-import com.example.skip.data.RuleSource
+import com.terrydemo.skip.data.AppSettings
+import com.terrydemo.skip.data.RuleRepository
+import com.terrydemo.skip.data.RuleAction
+import com.terrydemo.skip.data.SkipRule
+import com.terrydemo.skip.data.RuleSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

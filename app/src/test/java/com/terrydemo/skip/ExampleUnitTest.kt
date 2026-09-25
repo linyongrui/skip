@@ -1,4 +1,4 @@
-package com.example.skip
+package com.terrydemo.skip
 
 import org.junit.Test
 
