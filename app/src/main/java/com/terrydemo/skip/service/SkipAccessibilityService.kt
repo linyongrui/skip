@@ -34,6 +34,8 @@ class SkipAccessibilityService : AccessibilityService() {
     private var lastWindowKey = ""
     private var lastScanAt = 0L
     private var lastScanWindowKey = ""
+    private var foregroundPackageName = ""
+    private var foregroundEnteredAt = 0L
     private var debugOverlay: Button? = null
 
     override fun onServiceConnected() {
@@ -50,8 +52,22 @@ class SkipAccessibilityService : AccessibilityService() {
         event ?: return
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
         val packageName = event.packageName?.toString() ?: return
+        val eventNow = SystemClock.elapsedRealtime()
+        val enteredForeground = packageName != foregroundPackageName
+        if (enteredForeground) {
+            foregroundPackageName = packageName
+            foregroundEnteredAt = eventNow
+            // Returning to an app can reuse its old window id. Start a fresh
+            // foreground session so its one-page and attempt guards do not
+            // carry over from the previous visit.
+            completedPages.clear(); attempts.clear(); transientFailures.clear(); lastFailureAt.clear()
+            lastWindowKey = ""; lastScanWindowKey = ""; lastScanAt = 0L
+        }
         val activeRules = rules.filter { it.enabled && it.packageName == packageName }
         if (activeRules.isEmpty()) return
+        // Rules are only allowed during the short foreground-entry period.
+        // Switching activities within the same package does not restart it.
+        if (eventNow - foregroundEnteredAt > FOREGROUND_RULE_WINDOW_MS) return
         val windowKey = "$packageName:${event.windowId}"
         // A new window-state event can represent a fresh page even when the
         // platform reuses the same window id. Clear the one-shot guard so a
@@ -59,7 +75,6 @@ class SkipAccessibilityService : AccessibilityService() {
         if (windowKey != lastWindowKey || event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             completedPages.clear(); attempts.clear(); transientFailures.clear(); lastFailureAt.clear(); lastWindowKey = windowKey
         }
-        val eventNow = SystemClock.elapsedRealtime()
         if (windowKey == lastScanWindowKey && eventNow - lastScanAt < SCAN_INTERVAL_MS) return
         lastScanWindowKey = windowKey
         lastScanAt = eventNow
@@ -277,5 +292,6 @@ class SkipAccessibilityService : AccessibilityService() {
         const val SCAN_TIMEOUT_MS = 100L
         const val MAX_TRANSIENT_FAILURE_RETRIES = 1
         const val TRANSIENT_FAILURE_WINDOW_MS = 600L
+        const val FOREGROUND_RULE_WINDOW_MS = 8_000L
     }
 }
