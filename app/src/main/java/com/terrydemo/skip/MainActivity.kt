@@ -17,6 +17,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,6 +38,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
@@ -146,14 +148,14 @@ private fun SkipApp(serviceEnabled: Boolean) {
                         val knownRules = loadInitialRuleDefaults(context)
                         loadInstalledApps(context).filterNot { it.isSystem || isProtectedResetApp(it) }.map { app ->
                             val known = knownRules[app.packageName]
-                            SkipRule(enabled = true, packageName = app.packageName, viewId = known?.viewId.orEmpty(), text = known?.text ?: "跳过", contentDescription = known?.contentDescription.orEmpty(), className = known?.className.orEmpty(), pageMustContain = known?.pageMustContain.orEmpty(), pageMustNotContain = known?.pageMustNotContain.orEmpty(), action = known?.action ?: RuleAction.CLICK, executionLimit = known?.executionLimit ?: 1, source = RuleSource.INITIAL)
+                            SkipRule(enabled = true, packageName = app.packageName, viewId = known?.viewId.orEmpty(), text = known?.text ?: "跳过", contentDescription = known?.contentDescription.orEmpty(), pageMustContain = known?.pageMustContain.orEmpty(), pageMustNotContain = known?.pageMustNotContain.orEmpty(), action = known?.action ?: RuleAction.CLICK, executionLimit = known?.executionLimit ?: 1, source = RuleSource.INITIAL)
                         }
                     }
                     runCatching { repository.resetWithInitialRules(initialRules) }
                         .onSuccess { showMessage(context, "已重置并添加 ${initialRules.size} 条初始规则") }
                         .onFailure { showMessage(context, it.message ?: "重置规则失败") }
                 }
-            }, onEdit = { editing = it }, onToggle = { rule, enabled -> scope.launch { repository.saveRules(rules.map { if (it.id == rule.id) it.copy(enabled = enabled) else it }) } }, onDelete = { rule -> scope.launch { repository.saveRules(rules.filterNot { it.id == rule.id }) } }, onImportFile = { importFile.launch(arrayOf("application/json", "text/plain")) }, onExportFile = { exportFile.launch("跳过规则.json") })
+            }, onEdit = { editing = it }, onToggle = { rule, enabled -> scope.launch { repository.saveRules(rules.map { if (it.id == rule.id) it.copy(enabled = enabled) else it }) } }, onDelete = { rule -> scope.launch { repository.saveRules(rules.filterNot { it.id == rule.id }) } }, onDeleteMany = { ids -> scope.launch { repository.saveRules(rules.filterNot { it.id in ids }) } }, onImportFile = { importFile.launch(arrayOf("application/json", "text/plain")) }, onExportFile = { exportFile.launch("跳过规则.json") })
             "debug" -> DebugScreen(rules = rules, onBack = { screen = "rules" })
             else -> HomeScreen(rules, settings, serviceEnabled, onOpenSettings = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, onPause = { scope.launch { repository.setPaused(it) } }, onRules = { screen = "rules" }, onClearLogs = { scope.launch { repository.clearLogs() } }, logs = logs)
         }
@@ -187,16 +189,28 @@ private fun SkipApp(serviceEnabled: Boolean) {
     if (recentLogs.isNotBlank()) Text(recentLogs, style = MaterialTheme.typography.bodySmall)
 }
 
-@Composable private fun RulesScreen(rules: List<SkipRule>, onBack: () -> Unit, onAdd: () -> Unit, onCapture: () -> Unit, onReset: () -> Unit, onEdit: (SkipRule) -> Unit, onToggle: (SkipRule, Boolean) -> Unit, onDelete: (SkipRule) -> Unit, onImportFile: () -> Unit, onExportFile: () -> Unit) = Page("规则", onBack) {
+@Composable private fun RulesScreen(rules: List<SkipRule>, onBack: () -> Unit, onAdd: () -> Unit, onCapture: () -> Unit, onReset: () -> Unit, onEdit: (SkipRule) -> Unit, onToggle: (SkipRule, Boolean) -> Unit, onDelete: (SkipRule) -> Unit, onDeleteMany: (Set<String>) -> Unit, onImportFile: () -> Unit, onExportFile: () -> Unit) {
     val context = LocalContext.current
     var pendingDelete by remember { mutableStateOf<SkipRule?>(null) }
+    var showBatchDeleteConfirmation by remember { mutableStateOf(false) }
     var showResetConfirmation by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedRuleIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val appLabels = remember(rules) { rules.map { it.packageName }.distinct().associateWith { packageName -> runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(packageName, 0)).toString() }.getOrDefault(packageName) } }
     val visibleRules = rules.filter { rule ->
         query.isBlank() || listOf(appLabels[rule.packageName], rule.packageName, rule.text, rule.contentDescription, rule.source.displayName())
             .any { it?.contains(query, true) == true }
     }
+    Page("规则", onBack = if (selectionMode) null else onBack, headerActions = if (selectionMode) {
+        {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { selectedRuleIds = visibleRules.map { it.id }.toSet() }) { Text("全选") }
+                TextButton(onClick = { showBatchDeleteConfirmation = true }, enabled = selectedRuleIds.isNotEmpty()) { Text("删除") }
+                TextButton(onClick = { selectionMode = false; selectedRuleIds = emptySet() }) { Text("取消") }
+            }
+        }
+    } else null) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         if (rules.isEmpty()) {
             Button(onClick = { showResetConfirmation = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("重置", maxLines = 1, softWrap = false) }
@@ -210,8 +224,34 @@ private fun SkipApp(serviceEnabled: Boolean) {
     }
     Field("搜索应用、包名、文本或来源", query) { query = it }
     if (visibleRules.isEmpty()) Text("没有匹配的规则。", style = MaterialTheme.typography.bodySmall)
-    visibleRules.forEach { rule -> Card(modifier = Modifier.fillMaxWidth().clickable { onEdit(rule) }) { Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(appLabels[rule.packageName] ?: rule.packageName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("(${rule.source.displayName()})${rule.action.displayName()}${rule.text.ifBlank { rule.contentDescription.ifBlank { "-" } }}${rule.successCount}次", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }; Switch(checked = rule.enabled, onCheckedChange = { onToggle(rule, it) }); TextButton(onClick = { pendingDelete = rule }) { Text("删除") } } } }
+    visibleRules.forEach { rule ->
+        val selected = rule.id in selectedRuleIds
+        Card(modifier = Modifier.fillMaxWidth().combinedClickable(
+            onClick = {
+                if (selectionMode) selectedRuleIds = if (selected) selectedRuleIds - rule.id else selectedRuleIds + rule.id
+                else onEdit(rule)
+            },
+            onLongClick = {
+                selectionMode = true
+                selectedRuleIds = selectedRuleIds + rule.id
+            }
+        )) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(appLabels[rule.packageName] ?: rule.packageName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("(${rule.source.displayName()})${rule.action.displayName()}${rule.text.ifBlank { rule.contentDescription.ifBlank { "-" } }}${rule.successCount}次", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (!selectionMode) {
+                    Switch(checked = rule.enabled, onCheckedChange = { onToggle(rule, it) })
+                    TextButton(onClick = { pendingDelete = rule }) { Text("删除") }
+                } else {
+                    Checkbox(checked = selected, onCheckedChange = { checked -> selectedRuleIds = if (checked) selectedRuleIds + rule.id else selectedRuleIds - rule.id })
+                }
+            }
+        }
+    }
     pendingDelete?.let { rule -> AlertDialog(onDismissRequest = { pendingDelete = null }, title = { Text("确认删除规则？") }, text = { Text("将删除“${appLabels[rule.packageName] ?: rule.packageName}”的这条规则。") }, confirmButton = { TextButton(onClick = { pendingDelete = null; onDelete(rule) }) { Text("删除") } }, dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }) }
+    if (showBatchDeleteConfirmation) AlertDialog(onDismissRequest = { showBatchDeleteConfirmation = false }, title = { Text("确认删除规则？") }, text = { Text("将删除已选择的 ${selectedRuleIds.size} 条规则。") }, confirmButton = { TextButton(onClick = { val ids = selectedRuleIds; showBatchDeleteConfirmation = false; selectionMode = false; selectedRuleIds = emptySet(); onDeleteMany(ids) }) { Text("删除") } }, dismissButton = { TextButton(onClick = { showBatchDeleteConfirmation = false }) { Text("取消") } }) }
     if (showResetConfirmation) AlertDialog(onDismissRequest = { showResetConfirmation = false }, title = { Text("重置所有规则？") }, text = { Text("将移除全部现有规则，并为部分应用添加初始规则。此操作无法撤销！") }, confirmButton = { TextButton(onClick = { showResetConfirmation = false; onReset() }) { Text("确认重置") } }, dismissButton = { TextButton(onClick = { showResetConfirmation = false }) { Text("取消") } })
 }
 
@@ -229,12 +269,12 @@ private fun SkipApp(serviceEnabled: Boolean) {
     if (showAppPicker) InstalledAppPicker(excludedPackages = rules.map { it.packageName }.toSet(), onDismiss = { showAppPicker = false }, onSelected = { selectedApp = it; showAppPicker = false })
 }
 
-@Composable private fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composable () -> Unit) = Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) { Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { Text(title, style = MaterialTheme.typography.headlineMedium); onBack?.let { TextButton(onClick = it) { Text("返回") } } }; HorizontalDivider(); content() }
+@Composable private fun Page(title: String, onBack: (() -> Unit)? = null, headerActions: (@Composable () -> Unit)? = null, content: @Composable () -> Unit) = Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) { Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) { Text(title, style = MaterialTheme.typography.headlineMedium); headerActions?.invoke() ?: onBack?.let { TextButton(onClick = it) { Text("返回") } } }; HorizontalDivider(); content() }
 @Composable private fun StatusRow(label: String, value: String) = Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) { Text(label); Text(value) }
 
 @Composable private fun RuleEditor(rule: SkipRule, excludedPackages: Set<String>, onDismiss: () -> Unit, onSave: (SkipRule) -> Unit) {
     val context = LocalContext.current
-    var packageName by remember { mutableStateOf(rule.packageName) }; var viewId by remember { mutableStateOf(rule.viewId) }; var text by remember { mutableStateOf(rule.text) }; var description by remember { mutableStateOf(rule.contentDescription) }; var className by remember { mutableStateOf(rule.className) }; var required by remember { mutableStateOf(rule.pageMustContain) }; var forbidden by remember { mutableStateOf(rule.pageMustNotContain) }; var execution by remember { mutableStateOf(rule.executionLimit) }; var action by remember { mutableStateOf(rule.action) }; var error by remember { mutableStateOf("") }
+    var packageName by remember { mutableStateOf(rule.packageName) }; var viewId by remember { mutableStateOf(rule.viewId) }; var text by remember { mutableStateOf(rule.text) }; var description by remember { mutableStateOf(rule.contentDescription) }; var required by remember { mutableStateOf(rule.pageMustContain) }; var forbidden by remember { mutableStateOf(rule.pageMustNotContain) }; var execution by remember { mutableStateOf(rule.executionLimit) }; var action by remember { mutableStateOf(rule.action) }; var error by remember { mutableStateOf("") }
     var showAppPicker by remember { mutableStateOf(rule.packageName.isBlank()) }
     var selectedFromInstalledApps by remember { mutableStateOf(rule.packageName.isNotBlank()) }
     var showActionMenu by remember { mutableStateOf(false) }
@@ -245,7 +285,7 @@ private fun SkipApp(serviceEnabled: Boolean) {
             OutlinedButton(onClick = { showAppPicker = true }, modifier = Modifier.weight(1f).padding(start = 8.dp)) { Text(selectedAppName ?: "选择目标应用", maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
         Field("包名", packageName) { packageName = it }
-        Field("视图 ID", viewId) { viewId = it }; Field("文本", text) { text = it }; Field("内容描述", description) { description = it }; Field("控件类名（可选）", className) { className = it }; Field("页面必须包含", required) { required = it }; Field("页面不能包含", forbidden) { forbidden = it }
+        Field("视图 ID", viewId) { viewId = it }; Field("文本", text) { text = it }; Field("内容描述", description) { description = it }; Field("页面必须包含", required) { required = it }; Field("页面不能包含", forbidden) { forbidden = it }
         androidx.compose.foundation.layout.Box {
             OutlinedButton(onClick = { showActionMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("动作：${action.displayName()}") }
             DropdownMenu(expanded = showActionMenu, onDismissRequest = { showActionMenu = false }) {
@@ -262,7 +302,7 @@ private fun SkipApp(serviceEnabled: Boolean) {
             }
         }
         if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-    } }, confirmButton = { TextButton(onClick = { val candidate = rule.copy(packageName = packageName.trim(), viewId = viewId, text = text, contentDescription = description, className = className, pageMustContain = required, pageMustNotContain = forbidden, action = action, executionLimit = execution); error = if (rule.packageName.isBlank() && !selectedFromInstalledApps) "请先选择目标应用" else candidate.validate() ?: ""; if (error.isBlank()) onSave(candidate) }) { Text("保存") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+    } }, confirmButton = { TextButton(onClick = { val candidate = rule.copy(packageName = packageName.trim(), viewId = viewId, text = text, contentDescription = description, pageMustContain = required, pageMustNotContain = forbidden, action = action, executionLimit = execution); error = if (rule.packageName.isBlank() && !selectedFromInstalledApps) "请先选择目标应用" else candidate.validate() ?: ""; if (error.isBlank()) onSave(candidate) }) { Text("保存") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
     if (showAppPicker) InstalledAppPicker(excludedPackages = excludedPackages, onDismiss = { showAppPicker = false }, onSelected = { packageName = it.packageName; selectedFromInstalledApps = true; showAppPicker = false })
 }
 

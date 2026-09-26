@@ -223,9 +223,8 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun matchesNode(rule: SkipRule, node: AccessibilityNodeInfo): Boolean =
         (rule.viewId.isBlank() || rule.viewId == node.viewIdResourceName) &&
-            (rule.text.isBlank() || node.text?.toString()?.contains(rule.text, true) == true) &&
-            (rule.contentDescription.isBlank() || node.contentDescription?.toString()?.contains(rule.contentDescription, true) == true) &&
-            (rule.className.isBlank() || rule.className == node.className?.toString())
+        (rule.text.isBlank() || node.text?.toString()?.contains(rule.text, true) == true) &&
+        (rule.contentDescription.isBlank() || node.contentDescription?.toString()?.contains(rule.contentDescription, true) == true)
 
     private fun buildAutomaticRule(packageName: String, nodes: List<AccessibilityNodeInfo>): SkipRule? =
         nodes.firstNotNullOfOrNull { node ->

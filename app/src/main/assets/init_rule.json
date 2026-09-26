@@ -5,7 +5,7 @@
     {"packageName":"com.pa.health","viewId":"com.pa.health:id/tv_loading_jump"},
     {"packageName":"com.ct.client","viewId":"com.ct.client:id/btSkip"},
     {"packageName":"com.sinovatech.unicom.ui","viewId":"com.sinovatech.unicom.ui:id/welcome_advertise_close"},
-    {"packageName":"com.netease.cloudmusic","viewId":"com.netease.cloudmusic:id/skipBtnContainer"},
+    {"packageName":"com.netease.cloudmusic","viewId":"com.netease.cloudmusic:id/skipBtnContainer","text":""},
     {"packageName":"com.jingyao.easybike","viewId":"com.jingyao.easybike:id/tv_skip"},
     {"packageName":"cn.com.hkgt.gasapp","viewId":"cn.com.hkgt.gasapp:id/mCountDownTextView"},
     {"packageName":"com.gwm.fusion","viewId":"com.gwm.fusion:id/splash_tv"},

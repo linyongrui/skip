@@ -26,7 +26,6 @@ data class SkipRule(
     val viewId: String = "",
     val text: String = "",
     val contentDescription: String = "",
-    val className: String = "",
     val pageMustContain: String = "",
     val pageMustNotContain: String = "",
     val action: RuleAction = RuleAction.CLICK,
@@ -37,18 +36,18 @@ data class SkipRule(
     fun validate(): String? {
         if (!PACKAGE_REGEX.matches(packageName)) return "包名无效"
         if (viewId.isBlank() && text.isBlank() && contentDescription.isBlank()) return "请设置 View ID、文本或内容描述"
-        if (listOf(viewId, text, contentDescription, className, pageMustContain, pageMustNotContain).any { it.length > MAX_FIELD_LENGTH }) return "字段内容过长"
+        if (listOf(viewId, text, contentDescription, pageMustContain, pageMustNotContain).any { it.length > MAX_FIELD_LENGTH }) return "字段内容过长"
         if (executionLimit !in 1..2) return "执行次数必须为 1 或 2 次"
         if (successCount < 0) return "成功次数不能为负数"
         if (action == RuleAction.BACK && pageMustContain.isBlank()) return "系统返回动作必须设置页面必须包含"
-        if (action == RuleAction.PARENT_CLICK && className.isBlank() && pageMustContain.isBlank()) return "点击父级动作需要设置控件类名或页面必须包含"
+        if (action == RuleAction.PARENT_CLICK && pageMustContain.isBlank()) return "点击父级动作需要设置页面必须包含"
         return null
     }
 
     fun toJson(includeRuntime: Boolean = true) = JSONObject().apply {
         put("id", id); put("enabled", enabled); put("packageName", packageName)
         put("viewId", viewId); put("text", text); put("contentDescription", contentDescription)
-        put("className", className); put("pageMustContain", pageMustContain); put("pageMustNotContain", pageMustNotContain)
+        put("pageMustContain", pageMustContain); put("pageMustNotContain", pageMustNotContain)
         put("action", action.name); put("executionLimit", executionLimit)
         if (includeRuntime) { put("successCount", successCount); put("source", source.name) }
     }
@@ -80,10 +79,13 @@ data class SkipRule(
                 require(value is Number && value.toDouble() == value.toInt().toDouble()) { "successCount 必须为整数" }
                 value.toInt()
             } else 0
+            // Accepted only for backward compatibility. It is deliberately
+            // ignored by current matching and is no longer written on export.
+            if (json.has("className")) string("className")
             val rule = SkipRule(
                 id = string("id").ifBlank { UUID.randomUUID().toString() }, enabled = enabled,
                 packageName = string("packageName"), viewId = string("viewId"), text = string("text"),
-                contentDescription = string("contentDescription"), className = string("className"),
+                contentDescription = string("contentDescription"),
                 pageMustContain = string("pageMustContain"), pageMustNotContain = string("pageMustNotContain"),
                 action = RuleAction.valueOf(string("action")), executionLimit = executionLimit,
                 successCount = if (json.has("successCount")) successCount else 0,
