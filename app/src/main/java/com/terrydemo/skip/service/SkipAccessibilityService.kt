@@ -36,6 +36,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private var lastScanWindowKey = ""
     private var foregroundPackageName = ""
     private var foregroundEnteredAt = 0L
+    private var autoCaptureAttemptedForForeground = false
     private var debugOverlay: Button? = null
 
     override fun onServiceConnected() {
@@ -57,6 +58,7 @@ class SkipAccessibilityService : AccessibilityService() {
         if (enteredForeground) {
             foregroundPackageName = packageName
             foregroundEnteredAt = eventNow
+            autoCaptureAttemptedForForeground = false
             // Returning to an app can reuse its old window id. Start a fresh
             // foreground session so its one-page and attempt guards do not
             // carry over from the previous visit.
@@ -90,6 +92,23 @@ class SkipAccessibilityService : AccessibilityService() {
             val sensitivePage = isSensitivePage(scannedNodes)
             if (settings.paused || completedPages.contains(windowKey)) return
             if (sensitivePage) return
+            val initialRule = activeRules.firstOrNull { it.source == RuleSource.INITIAL && it.autoCaptureAttempts < MAX_AUTO_CAPTURE_ATTEMPTS }
+            if (initialRule != null) {
+                if (autoCaptureAttemptedForForeground) return
+                autoCaptureAttemptedForForeground = true
+                val captured = buildAutomaticRule(packageName, scannedNodes)
+                if (captured != null) completedPages.add(windowKey)
+                val updatedRule = if (captured == null) {
+                    initialRule.copy(autoCaptureAttempts = initialRule.autoCaptureAttempts + 1)
+                } else {
+                    captured.copy(id = initialRule.id, source = RuleSource.CAPTURE, autoCaptureAttempts = initialRule.autoCaptureAttempts + 1)
+                }
+                scope.launch {
+                    repository.updateRule(updatedRule)
+                    if (captured != null) repository.recordSuccess(initialRule.id)
+                }
+                return
+            }
             val rule = activeRules.firstOrNull { matchesPage(it, scannedNodes) && scannedNodes.any { node -> matchesNode(it, node) } } ?: return
             val attemptKey = "$windowKey:${rule.id}"
             val count = attempts[attemptKey] ?: 0
@@ -109,11 +128,8 @@ class SkipAccessibilityService : AccessibilityService() {
             // or another matching node, is actionable. Try each safe candidate
             // before waiting for another accessibility event.
             val success = when (rule.action) {
-                RuleAction.CLICK -> candidates.any {
-                    performSafeClick(it)
-                }
+                RuleAction.CLICK -> candidates.any { performSafeClick(it) }
                 RuleAction.PARENT_CLICK -> candidates.any { it.isVisibleToUser && it.isEnabled && clickAncestor(it) }
-                RuleAction.BACK -> rule.pageMustContain.isNotBlank() && performGlobalAction(GLOBAL_ACTION_BACK)
             }
             attempts[attemptKey] = count + 1
             if (success) {
@@ -280,7 +296,7 @@ class SkipAccessibilityService : AccessibilityService() {
         packageManager.getApplicationInfo(packageName, 0).loadLabel(packageManager).toString()
             .takeIf { it.isNotBlank() } ?: packageName
     }.getOrDefault(packageName)
-    private fun actionLabel(action: RuleAction) = when (action) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级"; RuleAction.BACK -> "系统返回" }
+    private fun actionLabel(action: RuleAction) = when (action) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级" }
 
     private companion object {
         const val MAX_DEPTH = 18
@@ -291,6 +307,7 @@ class SkipAccessibilityService : AccessibilityService() {
         const val SCAN_TIMEOUT_MS = 100L
         const val MAX_TRANSIENT_FAILURE_RETRIES = 1
         const val TRANSIENT_FAILURE_WINDOW_MS = 600L
-        const val FOREGROUND_RULE_WINDOW_MS = 8_000L
+        const val MAX_AUTO_CAPTURE_ATTEMPTS = 30
+        const val FOREGROUND_RULE_WINDOW_MS = 5_000L
     }
 }

@@ -142,18 +142,18 @@ private fun SkipApp(serviceEnabled: Boolean) {
     }
     Scaffold(modifier = Modifier.fillMaxSize()) { padding -> Column(Modifier.padding(padding)) {
         when (screen) {
-            "rules" -> RulesScreen(rules, onBack = { screen = "home" }, onAdd = { editing = SkipRule(enabled = true, packageName = "", text = "跳过", executionLimit = 1) }, onCapture = { screen = "debug" }, onReset = {
+            "rules" -> RulesScreen(rules, onBack = { screen = "home" }, onAdd = { editing = SkipRule(enabled = true, packageName = "", text = "跳过", executionLimit = 1) }, onCapture = { screen = "debug" }, onInitial = { apps ->
                 scope.launch {
                     val initialRules = withContext(Dispatchers.Default) {
                         val knownRules = loadInitialRuleDefaults(context)
-                        loadInstalledApps(context).filterNot { it.isSystem || isProtectedResetApp(it) }.map { app ->
+                        apps.map { app ->
                             val known = knownRules[app.packageName]
                             SkipRule(enabled = true, packageName = app.packageName, viewId = known?.viewId.orEmpty(), text = known?.text ?: "跳过", contentDescription = known?.contentDescription.orEmpty(), pageMustContain = known?.pageMustContain.orEmpty(), pageMustNotContain = known?.pageMustNotContain.orEmpty(), action = known?.action ?: RuleAction.CLICK, executionLimit = known?.executionLimit ?: 1, source = RuleSource.INITIAL)
                         }
                     }
-                    runCatching { repository.resetWithInitialRules(initialRules) }
-                        .onSuccess { showMessage(context, "已重置并添加 ${initialRules.size} 条初始规则") }
-                        .onFailure { showMessage(context, it.message ?: "重置规则失败") }
+                    runCatching { repository.saveRules(rules + initialRules) }
+                        .onSuccess { showMessage(context, "已添加 ${initialRules.size} 条初始规则") }
+                        .onFailure { showMessage(context, it.message ?: "添加初始规则失败") }
                 }
             }, onEdit = { editing = it }, onToggle = { rule, enabled -> scope.launch { repository.saveRules(rules.map { if (it.id == rule.id) it.copy(enabled = enabled) else it }) } }, onDelete = { rule -> scope.launch { repository.saveRules(rules.filterNot { it.id == rule.id }) } }, onDeleteMany = { ids -> scope.launch { repository.saveRules(rules.filterNot { it.id in ids }) } }, onImportFile = { importFile.launch(arrayOf("application/json", "text/plain")) }, onExportFile = { exportFile.launch("跳过规则.json") })
             "debug" -> DebugScreen(rules = rules, onBack = { screen = "rules" })
@@ -189,16 +189,16 @@ private fun SkipApp(serviceEnabled: Boolean) {
     if (recentLogs.isNotBlank()) Text(recentLogs, style = MaterialTheme.typography.bodySmall)
 }
 
-@Composable private fun RulesScreen(rules: List<SkipRule>, onBack: () -> Unit, onAdd: () -> Unit, onCapture: () -> Unit, onReset: () -> Unit, onEdit: (SkipRule) -> Unit, onToggle: (SkipRule, Boolean) -> Unit, onDelete: (SkipRule) -> Unit, onDeleteMany: (Set<String>) -> Unit, onImportFile: () -> Unit, onExportFile: () -> Unit) {
+@Composable private fun RulesScreen(rules: List<SkipRule>, onBack: () -> Unit, onAdd: () -> Unit, onCapture: () -> Unit, onInitial: (List<InstalledApp>) -> Unit, onEdit: (SkipRule) -> Unit, onToggle: (SkipRule, Boolean) -> Unit, onDelete: (SkipRule) -> Unit, onDeleteMany: (Set<String>) -> Unit, onImportFile: () -> Unit, onExportFile: () -> Unit) {
     val context = LocalContext.current
     var pendingDelete by remember { mutableStateOf<SkipRule?>(null) }
     var showBatchDeleteConfirmation by remember { mutableStateOf(false) }
-    var showResetConfirmation by remember { mutableStateOf(false) }
+    var showInitialRulePicker by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var selectionMode by remember { mutableStateOf(false) }
     var selectedRuleIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val appLabels = remember(rules) { rules.map { it.packageName }.distinct().associateWith { packageName -> runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(packageName, 0)).toString() }.getOrDefault(packageName) } }
-    val visibleRules = rules.filter { rule ->
+    val visibleRules = rules.sortedByDescending { rule: SkipRule -> rule.lastModifiedAt }.filter { rule ->
         query.isBlank() || listOf(appLabels[rule.packageName], rule.packageName, rule.text, rule.contentDescription, rule.source.displayName())
             .any { it?.contains(query, true) == true }
     }
@@ -213,9 +213,9 @@ private fun SkipApp(serviceEnabled: Boolean) {
     } else null) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         if (rules.isEmpty()) {
-            Button(onClick = { showResetConfirmation = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("重置", maxLines = 1, softWrap = false) }
+            Button(onClick = { showInitialRulePicker = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("初始规则", maxLines = 1, softWrap = false) }
         } else {
-            OutlinedButton(onClick = { showResetConfirmation = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("重置", maxLines = 1, softWrap = false) }
+            OutlinedButton(onClick = { showInitialRulePicker = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("初始规则", maxLines = 1, softWrap = false) }
         }
         OutlinedButton(onClick = onAdd, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("添加", maxLines = 1, softWrap = false) }
         OutlinedButton(onClick = onCapture, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("抓取", maxLines = 1, softWrap = false) }
@@ -239,7 +239,7 @@ private fun SkipApp(serviceEnabled: Boolean) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(appLabels[rule.packageName] ?: rule.packageName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("(${rule.source.displayName()})${rule.action.displayName()}${rule.text.ifBlank { rule.contentDescription.ifBlank { "-" } }}${rule.successCount}次", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("（${rule.source.displayName()}）${rule.text.ifBlank { rule.contentDescription.ifBlank { "-" } }}${rule.successCount}次${if (rule.source == RuleSource.INITIAL) "，自动抓取${rule.autoCaptureAttempts}次" else ""}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (!selectionMode) {
                     Switch(checked = rule.enabled, onCheckedChange = { onToggle(rule, it) })
@@ -252,7 +252,7 @@ private fun SkipApp(serviceEnabled: Boolean) {
     }
     pendingDelete?.let { rule -> AlertDialog(onDismissRequest = { pendingDelete = null }, title = { Text("确认删除规则？") }, text = { Text("将删除“${appLabels[rule.packageName] ?: rule.packageName}”的这条规则。") }, confirmButton = { TextButton(onClick = { pendingDelete = null; onDelete(rule) }) { Text("删除") } }, dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }) }
     if (showBatchDeleteConfirmation) AlertDialog(onDismissRequest = { showBatchDeleteConfirmation = false }, title = { Text("确认删除规则？") }, text = { Text("将删除已选择的 ${selectedRuleIds.size} 条规则。") }, confirmButton = { TextButton(onClick = { val ids = selectedRuleIds; showBatchDeleteConfirmation = false; selectionMode = false; selectedRuleIds = emptySet(); onDeleteMany(ids) }) { Text("删除") } }, dismissButton = { TextButton(onClick = { showBatchDeleteConfirmation = false }) { Text("取消") } }) }
-    if (showResetConfirmation) AlertDialog(onDismissRequest = { showResetConfirmation = false }, title = { Text("重置所有规则？") }, text = { Text("将移除全部现有规则，并为部分应用添加初始规则。此操作无法撤销！") }, confirmButton = { TextButton(onClick = { showResetConfirmation = false; onReset() }) { Text("确认重置") } }, dismissButton = { TextButton(onClick = { showResetConfirmation = false }) { Text("取消") } })
+    if (showInitialRulePicker) InitialRulePicker(excludedPackages = rules.map { it.packageName }.toSet(), onDismiss = { showInitialRulePicker = false }, onConfirm = { selected -> showInitialRulePicker = false; onInitial(selected) })
 }
 
 @Composable private fun DebugScreen(rules: List<SkipRule>, onBack: () -> Unit) {
@@ -344,6 +344,27 @@ private fun loadInitialRuleDefaults(context: Context): Map<String, SkipRule> = r
     }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
 }
 
+@Composable private fun InitialRulePicker(excludedPackages: Set<String>, onDismiss: () -> Unit, onConfirm: (List<InstalledApp>) -> Unit) {
+    val context = LocalContext.current
+    val apps by produceState<List<InstalledApp>?>(initialValue = null, context) { value = withContext(Dispatchers.Default) { loadInstalledApps(context) } }
+    var query by remember { mutableStateOf("") }
+    val candidates = (apps ?: emptyList()).filter { !it.isSystem && it.packageName !in excludedPackages }
+    val visible = candidates.filter { query.isBlank() || it.label.contains(query, true) || it.packageName.contains(query, true) }
+    var selected by remember(candidates) { mutableStateOf(candidates.filterNot(::isProtectedResetApp).map { it.packageName }.toSet()) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("选择初始规则应用") }, text = {
+        Column {
+            Field("按名称或包名搜索", query) { query = it }
+            if (apps == null) CircularProgressIndicator()
+            LazyColumn { items(visible, key = { it.packageName }) { app ->
+                val checked = app.packageName in selected
+                Row(Modifier.fillMaxWidth().clickable { selected = if (checked) selected - app.packageName else selected + app.packageName }, verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = checked, onCheckedChange = { value -> selected = if (value) selected + app.packageName else selected - app.packageName })
+                    Column(Modifier.padding(vertical = 8.dp)) { Text(app.label); Text(app.packageName, style = MaterialTheme.typography.bodySmall) }
+                }
+            } }
+        }
+    }, confirmButton = { TextButton(onClick = { onConfirm(candidates.filter { it.packageName in selected }) }, enabled = selected.isNotEmpty()) { Text("添加") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+}
 private fun loadInstalledApps(context: Context): List<InstalledApp> {
     val pm = context.packageManager
     return pm.getInstalledApplications(0)
@@ -390,7 +411,7 @@ private fun isProtectedResetApp(app: InstalledApp): Boolean {
     )
 }
 @Composable private fun compactFieldPadding() = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-private fun RuleAction.displayName() = when (this) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级"; RuleAction.BACK -> "系统返回" }
+private fun RuleAction.displayName() = when (this) { RuleAction.CLICK -> "点击"; RuleAction.PARENT_CLICK -> "点击父级" }
 private fun RuleSource.displayName() = when (this) { RuleSource.INITIAL -> "初始"; RuleSource.MANUAL -> "手动"; RuleSource.CAPTURE -> "抓取"; RuleSource.IMPORT -> "导入" }
 private fun isServiceEnabled(context: Context): Boolean {
     val component = ComponentName(context, "${context.packageName}.service.SkipAccessibilityService").flattenToString()

@@ -25,7 +25,7 @@ class RuleRepository(private val context: Context) {
     val settings: Flow<AppSettings> = context.ruleDataStore.data.map { AppSettings(it[pausedKey] ?: false) }
     val logs: Flow<String> = context.ruleDataStore.data.map { formatStoredLogs(it[logKey] ?: "") }
     suspend fun saveRules(rules: List<SkipRule>) {
-        val normalized = keepHighestPriorityRules(rules)
+        val normalized = keepHighestPriorityRules(rules).map { it.copy(lastModifiedAt = System.currentTimeMillis()) }
         require(normalized.size <= MAX_RULES)
         require(normalized.map { it.id }.distinct().size == normalized.size) { "规则 ID 不能重复" }
         context.ruleDataStore.edit { it[documentKey] = RuleDocument(normalized).toJson() }
@@ -52,19 +52,28 @@ class RuleRepository(private val context: Context) {
         }
         return added
     }
+    suspend fun updateRule(rule: SkipRule) {
+        context.ruleDataStore.edit { preferences ->
+            val existing = RuleDocument.parse(preferences[documentKey] ?: "{\"version\":1,\"rules\":[]}")
+            val updated = existing.map { if (it.id == rule.id) rule.copy(lastModifiedAt = System.currentTimeMillis()) else it }
+            preferences[documentKey] = RuleDocument(updated).toJson()
+        }
+    }
     suspend fun recordSuccess(ruleId: String) {
         context.ruleDataStore.edit { preferences ->
             val existing = RuleDocument.parse(preferences[documentKey] ?: "{\"version\":1,\"rules\":[]}")
-            val updated = existing.map { if (it.id == ruleId) it.copy(successCount = it.successCount + 1) else it }
+            val updated = existing.map { if (it.id == ruleId) it.copy(successCount = it.successCount + 1, lastModifiedAt = System.currentTimeMillis()) else it }
             if (updated != existing) preferences[documentKey] = RuleDocument(updated).toJson()
         }
     }
     suspend fun setPaused(paused: Boolean) { context.ruleDataStore.edit { it[pausedKey] = paused } }
-    suspend fun appendLog(message: String) { context.ruleDataStore.edit { preferences ->
-        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        val line = "$timestamp $message\n"
-        preferences[logKey] = ((preferences[logKey] ?: "") + line).takeLast(64 * 1024)
-    } }
+    suspend fun appendLog(message: String) {
+        context.ruleDataStore.edit { preferences ->
+            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+            val line = "$timestamp $message\n"
+            preferences[logKey] = ((preferences[logKey] ?: "") + line).takeLast(64 * 1024)
+        }
+    }
     suspend fun clearLogs() { context.ruleDataStore.edit { it.remove(logKey) } }
 
     private fun keepHighestPriorityRules(rules: List<SkipRule>): List<SkipRule> = rules
@@ -80,8 +89,7 @@ class RuleRepository(private val context: Context) {
         return raw.lineSequence().joinToString("\n") { line ->
             val match = legacyTimestamp.matchEntire(line) ?: return@joinToString line
             runCatching {
-                val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                    .format(Date(match.groupValues[1].toLong()))
+                val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(match.groupValues[1].toLong()))
                 "$timestamp ${match.groupValues[2]}"
             }.getOrDefault(line)
         }

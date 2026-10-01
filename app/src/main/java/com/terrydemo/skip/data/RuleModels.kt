@@ -9,7 +9,7 @@ const val MAX_RULES = 1_000
 const val MAX_FIELD_LENGTH = 160
 const val MAX_RULE_DOCUMENT_LENGTH = 256 * 1024
 
-enum class RuleAction { CLICK, PARENT_CLICK, BACK }
+enum class RuleAction { CLICK, PARENT_CLICK }
 enum class RuleSource { INITIAL, MANUAL, CAPTURE, IMPORT }
 
 fun RuleSource.priority(): Int = when (this) {
@@ -31,7 +31,9 @@ data class SkipRule(
     val action: RuleAction = RuleAction.CLICK,
     val executionLimit: Int = 1,
     val successCount: Int = 0,
-    val source: RuleSource = RuleSource.MANUAL
+    val source: RuleSource = RuleSource.MANUAL,
+    val lastModifiedAt: Long = System.currentTimeMillis(),
+    val autoCaptureAttempts: Int = 0
 ) {
     fun validate(): String? {
         if (!PACKAGE_REGEX.matches(packageName)) return "包名无效"
@@ -39,7 +41,7 @@ data class SkipRule(
         if (listOf(viewId, text, contentDescription, pageMustContain, pageMustNotContain).any { it.length > MAX_FIELD_LENGTH }) return "字段内容过长"
         if (executionLimit !in 1..2) return "执行次数必须为 1 或 2 次"
         if (successCount < 0) return "成功次数不能为负数"
-        if (action == RuleAction.BACK && pageMustContain.isBlank()) return "系统返回动作必须设置页面必须包含"
+
         if (action == RuleAction.PARENT_CLICK && pageMustContain.isBlank()) return "点击父级动作需要设置页面必须包含"
         return null
     }
@@ -49,13 +51,13 @@ data class SkipRule(
         put("viewId", viewId); put("text", text); put("contentDescription", contentDescription)
         put("pageMustContain", pageMustContain); put("pageMustNotContain", pageMustNotContain)
         put("action", action.name); put("executionLimit", executionLimit)
-        if (includeRuntime) { put("successCount", successCount); put("source", source.name) }
+        if (includeRuntime) { put("successCount", successCount); put("source", source.name); put("lastModifiedAt", lastModifiedAt); put("autoCaptureAttempts", autoCaptureAttempts) }
     }
 
     companion object {
         private val PACKAGE_REGEX = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
         fun fromJson(json: JSONObject): SkipRule {
-            val allowed = setOf("id", "enabled", "packageName", "viewId", "text", "contentDescription", "className", "pageMustContain", "pageMustNotContain", "action", "executionLimit", "retryLimit", "successCount", "source")
+            val allowed = setOf("id", "enabled", "packageName", "viewId", "text", "contentDescription", "className", "pageMustContain", "pageMustNotContain", "action", "executionLimit", "retryLimit", "successCount", "source", "lastModifiedAt", "autoCaptureAttempts")
             require(json.keys().asSequence().all { it in allowed }) { "包含未知规则字段" }
             fun string(name: String): String {
                 val value = if (json.has(name)) json.get(name) else ""
@@ -87,9 +89,11 @@ data class SkipRule(
                 packageName = string("packageName"), viewId = string("viewId"), text = string("text"),
                 contentDescription = string("contentDescription"),
                 pageMustContain = string("pageMustContain"), pageMustNotContain = string("pageMustNotContain"),
-                action = RuleAction.valueOf(string("action")), executionLimit = executionLimit,
+                action = runCatching { RuleAction.valueOf(string("action")) }.getOrDefault(RuleAction.CLICK), executionLimit = executionLimit,
                 successCount = if (json.has("successCount")) successCount else 0,
-                source = if (json.has("source")) RuleSource.valueOf(string("source")) else RuleSource.MANUAL
+                source = if (json.has("source")) RuleSource.valueOf(string("source")) else RuleSource.MANUAL,
+                lastModifiedAt = json.optLong("lastModifiedAt", System.currentTimeMillis()),
+                autoCaptureAttempts = json.optInt("autoCaptureAttempts", 0).coerceAtLeast(0)
             )
             require(rule.validate() == null) { rule.validate() ?: "规则无效" }
             return rule
