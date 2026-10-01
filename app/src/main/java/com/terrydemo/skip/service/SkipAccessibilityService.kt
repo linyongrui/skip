@@ -19,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import java.util.concurrent.ConcurrentHashMap
 
 class SkipAccessibilityService : AccessibilityService() {
@@ -36,7 +37,8 @@ class SkipAccessibilityService : AccessibilityService() {
     private var lastScanWindowKey = ""
     private var foregroundPackageName = ""
     private var foregroundEnteredAt = 0L
-    private var autoCaptureAttemptedForForeground = false
+    private var autoCaptureJob: Job? = null
+    private var autoCaptureSucceededForForeground = false
     private var debugOverlay: Button? = null
 
     override fun onServiceConnected() {
@@ -58,7 +60,9 @@ class SkipAccessibilityService : AccessibilityService() {
         if (enteredForeground) {
             foregroundPackageName = packageName
             foregroundEnteredAt = eventNow
-            autoCaptureAttemptedForForeground = false
+            autoCaptureJob?.cancel()
+            autoCaptureSucceededForForeground = false
+            autoCaptureJob = scope.launch { runAutomaticCaptureSession(packageName) }
             // Returning to an app can reuse its old window id. Start a fresh
             // foreground session so its one-page and attempt guards do not
             // carry over from the previous visit.
@@ -90,25 +94,9 @@ class SkipAccessibilityService : AccessibilityService() {
             nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
             val scannedNodes = nodes ?: return
             val sensitivePage = isSensitivePage(scannedNodes)
-            if (settings.paused || completedPages.contains(windowKey)) return
+            if (settings.paused || completedPages.contains(windowKey) || autoCaptureSucceededForForeground) return
             if (sensitivePage) return
-            val initialRule = activeRules.firstOrNull { it.source == RuleSource.INITIAL && it.autoCaptureAttempts < MAX_AUTO_CAPTURE_ATTEMPTS }
-            if (initialRule != null) {
-                if (autoCaptureAttemptedForForeground) return
-                autoCaptureAttemptedForForeground = true
-                val captured = buildAutomaticRule(packageName, scannedNodes)
-                if (captured != null) completedPages.add(windowKey)
-                val updatedRule = if (captured == null) {
-                    initialRule.copy(autoCaptureAttempts = initialRule.autoCaptureAttempts + 1)
-                } else {
-                    captured.copy(id = initialRule.id, source = RuleSource.CAPTURE, autoCaptureAttempts = initialRule.autoCaptureAttempts + 1)
-                }
-                scope.launch {
-                    repository.updateRule(updatedRule)
-                    if (captured != null) repository.recordSuccess(initialRule.id)
-                }
-                return
-            }
+            if (activeRules.any { it.source == RuleSource.INITIAL && it.viewId.isBlank() && it.autoCaptureAttempts < MAX_AUTO_CAPTURE_ATTEMPTS }) return
             val rule = activeRules.firstOrNull { matchesPage(it, scannedNodes) && scannedNodes.any { node -> matchesNode(it, node) } } ?: return
             val attemptKey = "$windowKey:${rule.id}"
             val count = attempts[attemptKey] ?: 0
@@ -147,7 +135,7 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() = Unit
-    override fun onDestroy() { removeDebugOverlay(); scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { autoCaptureJob?.cancel(); removeDebugOverlay(); scope.cancel(); super.onDestroy() }
 
     private fun showDebugOverlay(packageName: String) {
         removeDebugOverlay()
@@ -194,7 +182,7 @@ class SkipAccessibilityService : AccessibilityService() {
             val automaticRule = buildAutomaticRule(packageName, scannedNodes)
             NodeDebugStore.publish(snapshot)
             if (automaticRule == null) {
-                NodeDebugStore.appendStatus("未自动添加规则：未找到同时具有稳定 View ID 和“跳过/skip”标识的可点击控件。")
+                NodeDebugStore.appendStatus("未自动添加规则：未找到可见、启用、可点击且具有“跳过/skip”标识的控件。")
             } else {
                 scope.launch {
                     runCatching { repository.addRuleIfAbsent(automaticRule.copy(source = RuleSource.CAPTURE)) }
@@ -209,6 +197,43 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
+    private suspend fun runAutomaticCaptureSession(packageName: String) {
+        var attemptedThisSession = 0
+        for (slot in 0..MAX_AUTO_CAPTURE_RETRIES) {
+            if (slot > 0) kotlinx.coroutines.delay(AUTO_CAPTURE_RETRY_INTERVAL_MS)
+            if (packageName != foregroundPackageName || autoCaptureSucceededForForeground) return
+            val initialRule = rules.firstOrNull { it.enabled && it.packageName == packageName && it.source == RuleSource.INITIAL && it.viewId.isBlank() && it.autoCaptureAttempts < MAX_AUTO_CAPTURE_ATTEMPTS }
+                ?: continue
+            if (initialRule.autoCaptureAttempts + attemptedThisSession >= MAX_AUTO_CAPTURE_ATTEMPTS) return
+            attemptAutomaticCapture(packageName, initialRule, attemptedThisSession + 1)
+            attemptedThisSession++
+        }
+    }
+
+    private suspend fun attemptAutomaticCapture(packageName: String, initialRule: SkipRule, attempt: Int) {
+        val appLabel = applicationLabel(packageName)
+        val result = runCatching {
+            if (settings.paused) return@runCatching null to "服务已暂停"
+            val root = rootInActiveWindow ?: return@runCatching null to "当前界面暂无可访问根节点"
+            if (root.packageName?.toString() != packageName) return@runCatching null to "当前界面包名不匹配"
+            runCatching { root.refresh() }
+            val nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
+            if (isSensitivePage(nodes)) return@runCatching null to "当前页面包含敏感输入或支付信息"
+            val captured = buildAutomaticRule(packageName, nodes)
+            captured to if (captured == null) automaticCaptureFailureReason(nodes) else null
+        }.getOrElse { null to (it.message ?: it.javaClass.simpleName) }
+        val captured = result.first
+        val reason = result.second
+        if (captured == null) {
+            repository.updateRule(initialRule.copy(autoCaptureAttempts = initialRule.autoCaptureAttempts + 1))
+            repository.appendLog("$appLabel 自动抓取失败（第${attempt}次）：${reason ?: "未知原因"}")
+            return
+        }
+        autoCaptureSucceededForForeground = true
+        repository.updateRule(captured.copy(id = initialRule.id, source = RuleSource.CAPTURE, autoCaptureAttempts = initialRule.autoCaptureAttempts + 1))
+        repository.recordSuccess(initialRule.id)
+        repository.appendLog("$appLabel 自动抓取成功")
+    }
     private fun collectNodes(root: AccessibilityNodeInfo, maxDepth: Int, maxNodes: Int): List<AccessibilityNodeInfo> {
         val result = ArrayList<AccessibilityNodeInfo>(maxNodes)
         val startedAt = SystemClock.elapsedRealtime()
@@ -247,7 +272,7 @@ class SkipAccessibilityService : AccessibilityService() {
             val viewId = node.viewIdResourceName.orEmpty()
             val text = skipKeyword(node.text?.toString())
             val description = skipKeyword(node.contentDescription?.toString())
-            if (!node.isVisibleToUser || !node.isEnabled || !node.isClickable || viewId.isBlank() || (text == null && description == null && !viewId.contains("skip", true))) {
+            if (!node.isVisibleToUser || !node.isEnabled || !node.isClickable || (text == null && description == null && !viewId.contains("skip", true))) {
                 null
             } else {
                 SkipRule(
@@ -262,6 +287,12 @@ class SkipAccessibilityService : AccessibilityService() {
             }
         }
 
+    private fun automaticCaptureFailureReason(nodes: List<AccessibilityNodeInfo>): String {
+        if (nodes.isEmpty()) return "未读取到任何节点"
+        if (nodes.none { it.isVisibleToUser && it.isEnabled }) return "没有可见且启用的节点"
+        if (nodes.none { it.isVisibleToUser && it.isEnabled && it.isClickable }) return "没有可点击的节点"
+        return "未找到包含“跳过”或 skip 标识的可点击节点"
+    }
     private fun skipKeyword(value: String?): String? = when {
         value.isNullOrBlank() -> null
         value.contains("跳过", true) -> "跳过"
@@ -308,6 +339,8 @@ class SkipAccessibilityService : AccessibilityService() {
         const val MAX_TRANSIENT_FAILURE_RETRIES = 1
         const val TRANSIENT_FAILURE_WINDOW_MS = 600L
         const val MAX_AUTO_CAPTURE_ATTEMPTS = 30
+        const val MAX_AUTO_CAPTURE_RETRIES = 5
+        const val AUTO_CAPTURE_RETRY_INTERVAL_MS = 1_000L
         const val FOREGROUND_RULE_WINDOW_MS = 5_000L
     }
 }

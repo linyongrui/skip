@@ -213,9 +213,9 @@ private fun SkipApp(serviceEnabled: Boolean) {
     } else null) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         if (rules.isEmpty()) {
-            Button(onClick = { showInitialRulePicker = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("初始规则", maxLines = 1, softWrap = false) }
+            Button(onClick = { showInitialRulePicker = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("初始", maxLines = 1, softWrap = false) }
         } else {
-            OutlinedButton(onClick = { showInitialRulePicker = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("初始规则", maxLines = 1, softWrap = false) }
+            OutlinedButton(onClick = { showInitialRulePicker = true }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("初始", maxLines = 1, softWrap = false) }
         }
         OutlinedButton(onClick = onAdd, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("添加", maxLines = 1, softWrap = false) }
         OutlinedButton(onClick = onCapture, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("抓取", maxLines = 1, softWrap = false) }
@@ -239,7 +239,7 @@ private fun SkipApp(serviceEnabled: Boolean) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(appLabels[rule.packageName] ?: rule.packageName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("（${rule.source.displayName()}）${rule.text.ifBlank { rule.contentDescription.ifBlank { "-" } }}${rule.successCount}次${if (rule.source == RuleSource.INITIAL) "，自动抓取${rule.autoCaptureAttempts}次" else ""}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("（${rule.source.displayName()}）跳过${rule.successCount}次${if (rule.source == RuleSource.INITIAL) "，自动抓取${rule.autoCaptureAttempts}次" else ""}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (!selectionMode) {
                     Switch(checked = rule.enabled, onCheckedChange = { onToggle(rule, it) })
