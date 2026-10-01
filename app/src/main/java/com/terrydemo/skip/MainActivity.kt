@@ -239,7 +239,7 @@ private fun SkipApp(serviceEnabled: Boolean) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(appLabels[rule.packageName] ?: rule.packageName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("（${rule.source.displayName()}）跳过${rule.successCount}次${if (rule.source == RuleSource.INITIAL) "，自动抓取${rule.autoCaptureAttempts}次" else ""}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("（${rule.source.displayName()}）跳过${rule.successCount}次${if (rule.source == RuleSource.INITIAL && rule.viewId.isBlank() && rule.autoCaptureAttempts < 30) "，自动抓取${rule.autoCaptureAttempts}次" else ""}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (!selectionMode) {
                     Switch(checked = rule.enabled, onCheckedChange = { onToggle(rule, it) })

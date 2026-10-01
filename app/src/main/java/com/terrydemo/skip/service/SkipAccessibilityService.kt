@@ -38,6 +38,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private var foregroundPackageName = ""
     private var foregroundEnteredAt = 0L
     private var autoCaptureJob: Job? = null
+    private var ruleExecutionJob: Job? = null
     private var autoCaptureSucceededForForeground = false
     private var debugOverlay: Button? = null
 
@@ -55,87 +56,21 @@ class SkipAccessibilityService : AccessibilityService() {
         event ?: return
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
         val packageName = event.packageName?.toString() ?: return
-        val eventNow = SystemClock.elapsedRealtime()
-        val enteredForeground = packageName != foregroundPackageName
-        if (enteredForeground) {
-            foregroundPackageName = packageName
-            foregroundEnteredAt = eventNow
-            autoCaptureJob?.cancel()
-            autoCaptureSucceededForForeground = false
-            autoCaptureJob = scope.launch { runAutomaticCaptureSession(packageName) }
-            // Returning to an app can reuse its old window id. Start a fresh
-            // foreground session so its one-page and attempt guards do not
-            // carry over from the previous visit.
-            completedPages.clear(); attempts.clear(); transientFailures.clear(); lastFailureAt.clear()
-            lastWindowKey = ""; lastScanWindowKey = ""; lastScanAt = 0L
-        }
-        val activeRules = rules.filter { it.enabled && it.packageName == packageName }
-        if (activeRules.isEmpty()) return
-        // Rules are only allowed during the short foreground-entry period.
-        // Switching activities within the same package does not restart it.
-        if (eventNow - foregroundEnteredAt > FOREGROUND_RULE_WINDOW_MS) return
-        val windowKey = "$packageName:${event.windowId}"
-        // A new window-state event can represent a fresh page even when the
-        // platform reuses the same window id. Clear the one-shot guard so a
-        // rule can run again on the next app launch/page transition.
-        if (windowKey != lastWindowKey || event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            completedPages.clear(); attempts.clear(); transientFailures.clear(); lastFailureAt.clear(); lastWindowKey = windowKey
-        }
-        if (windowKey == lastScanWindowKey && eventNow - lastScanAt < SCAN_INTERVAL_MS) return
-        lastScanWindowKey = windowKey
-        lastScanAt = eventNow
-        val root = rootInActiveWindow ?: return
-        if (root.packageName?.toString() != packageName) return
-        var nodes: List<AccessibilityNodeInfo>? = null
-        try {
-            // The accessibility tree can be replaced while an ad is animating.
-            // Refreshing the root before traversal avoids acting on a stale snapshot.
-            runCatching { root.refresh() }
-            nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
-            val scannedNodes = nodes ?: return
-            val sensitivePage = isSensitivePage(scannedNodes)
-            if (settings.paused || completedPages.contains(windowKey) || autoCaptureSucceededForForeground) return
-            if (sensitivePage) return
-            if (activeRules.any { it.source == RuleSource.INITIAL && it.viewId.isBlank() && it.autoCaptureAttempts < MAX_AUTO_CAPTURE_ATTEMPTS }) return
-            val rule = activeRules.firstOrNull { matchesPage(it, scannedNodes) && scannedNodes.any { node -> matchesNode(it, node) } } ?: return
-            val attemptKey = "$windowKey:${rule.id}"
-            val count = attempts[attemptKey] ?: 0
-            val failureCount = transientFailures[attemptKey] ?: 0
-            val failedAt = lastFailureAt[attemptKey] ?: 0L
-            val recoveryRetry = failureCount < MAX_TRANSIENT_FAILURE_RETRIES &&
-                eventNow - failedAt <= TRANSIENT_FAILURE_WINDOW_MS
-            if (count >= rule.executionLimit && !recoveryRetry) return
-            val now = System.currentTimeMillis()
-            if (now - lastExecutionAt < COOLDOWN_MS) return
-            val candidates = scannedNodes.filter { matchesNode(rule, it) }
-                .sortedWith(compareByDescending<AccessibilityNodeInfo> { it === event.source }
-                    .thenByDescending { it.isClickable }
-                    .thenByDescending { it.isVisibleToUser })
-            if (candidates.isEmpty()) return
-            // A matching label can be a non-clickable child while its button,
-            // or another matching node, is actionable. Try each safe candidate
-            // before waiting for another accessibility event.
-            val success = when (rule.action) {
-                RuleAction.CLICK -> candidates.any { performSafeClick(it) }
-                RuleAction.PARENT_CLICK -> candidates.any { it.isVisibleToUser && it.isEnabled && clickAncestor(it) }
-            }
-            attempts[attemptKey] = count + 1
-            if (success) {
-                completedPages.add(windowKey); transientFailures.remove(attemptKey); lastFailureAt.remove(attemptKey); lastExecutionAt = now
-                val appLabel = applicationLabel(packageName)
-                scope.launch { repository.recordSuccess(rule.id) }
-                scope.launch { repository.appendLog("已对 $appLabel 执行${actionLabel(rule.action)}") }
-            } else {
-                transientFailures[attemptKey] = failureCount + 1
-                lastFailureAt[attemptKey] = eventNow
-            }
-        } catch (_: RuntimeException) {
-            // Fail open: accessibility events must never interfere with the foreground app.
-        }
+        if (packageName == foregroundPackageName) return
+        foregroundPackageName = packageName
+        foregroundEnteredAt = SystemClock.elapsedRealtime()
+        autoCaptureJob?.cancel()
+        ruleExecutionJob?.cancel()
+        autoCaptureSucceededForForeground = false
+        autoCaptureJob = scope.launch { runAutomaticCaptureSession(packageName) }
+        ruleExecutionJob = scope.launch { runRuleExecutionSession(packageName) }
+        // Returning to an app can reuse its old window id. Start a fresh
+        // foreground session so one-shot guards do not carry over.
+        completedPages.clear(); attempts.clear(); transientFailures.clear(); lastFailureAt.clear()
+        lastWindowKey = ""; lastScanWindowKey = ""; lastScanAt = 0L
     }
-
     override fun onInterrupt() = Unit
-    override fun onDestroy() { autoCaptureJob?.cancel(); removeDebugOverlay(); scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { autoCaptureJob?.cancel(); ruleExecutionJob?.cancel(); removeDebugOverlay(); scope.cancel(); super.onDestroy() }
 
     private fun showDebugOverlay(packageName: String) {
         removeDebugOverlay()
@@ -197,6 +132,43 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
+    private suspend fun runRuleExecutionSession(packageName: String) {
+        for (attempt in 0..MAX_RULE_EXECUTION_RETRIES) {
+            if (attempt > 0) kotlinx.coroutines.delay(RULE_EXECUTION_RETRY_INTERVAL_MS)
+            if (packageName != foregroundPackageName || autoCaptureSucceededForForeground) return
+            if (settings.paused) continue
+            val autoCapturePending = rules.any {
+                it.enabled && it.packageName == packageName && it.source == RuleSource.INITIAL &&
+                    it.viewId.isBlank() && it.autoCaptureAttempts < MAX_AUTO_CAPTURE_ATTEMPTS
+            }
+            if (autoCapturePending) continue
+            val rule = rules.firstOrNull { it.enabled && it.packageName == packageName }
+                ?: continue
+            if (attemptRuleExecution(packageName, rule)) return
+        }
+    }
+
+    private fun attemptRuleExecution(packageName: String, rule: SkipRule): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if (root.packageName?.toString() != packageName) return false
+        return runCatching {
+            runCatching { root.refresh() }
+            val nodes = collectNodes(root, MAX_DEPTH, MAX_NODES)
+            if (isSensitivePage(nodes) || !matchesPage(rule, nodes)) return false
+            val candidates = nodes.filter { matchesNode(rule, it) }
+            if (candidates.isEmpty()) return false
+            val success = when (rule.action) {
+                RuleAction.CLICK -> candidates.any { performSafeClick(it) }
+                RuleAction.PARENT_CLICK -> candidates.any { it.isVisibleToUser && it.isEnabled && clickAncestor(it) }
+            }
+            if (success) {
+                val appLabel = applicationLabel(packageName)
+                scope.launch { repository.recordSuccess(rule.id) }
+                scope.launch { repository.appendLog("已对 $appLabel 执行${actionLabel(rule.action)}") }
+            }
+            success
+        }.getOrDefault(false)
+    }
     private suspend fun runAutomaticCaptureSession(packageName: String) {
         var attemptedThisSession = 0
         for (slot in 0..MAX_AUTO_CAPTURE_RETRIES) {
@@ -340,6 +312,8 @@ class SkipAccessibilityService : AccessibilityService() {
         const val TRANSIENT_FAILURE_WINDOW_MS = 600L
         const val MAX_AUTO_CAPTURE_ATTEMPTS = 30
         const val MAX_AUTO_CAPTURE_RETRIES = 5
+        const val MAX_RULE_EXECUTION_RETRIES = 2
+        const val RULE_EXECUTION_RETRY_INTERVAL_MS = 1_000L
         const val AUTO_CAPTURE_RETRY_INTERVAL_MS = 1_000L
         const val FOREGROUND_RULE_WINDOW_MS = 5_000L
     }
